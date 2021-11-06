@@ -17,5 +17,5 @@ Trim pages:
     ./pluck -t -f database.fdb
 
 # Restrictions
-Supported version Firebird 2.X, 3.X, 4.X, Red Database 2.X, 3.X
+Supported version Firebird 2.X, 3.X, 4.X, Red Database 2.X, 3.X.
 Supported block size 512 and 4096.

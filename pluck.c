@@ -146,6 +146,11 @@ int main(int argc, char *argv[]) {
     if (goodbye)
         return 0;
 
+    if (!trim)
+    {
+        mylog(1, "Dry run mode\n");
+    }
+
     int fd;
     if (trim)
     {

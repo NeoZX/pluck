@@ -52,6 +52,19 @@ int is_supported_ods(unsigned short ods_version)
     return 0;
 }
 
+char *ods2str(unsigned short ods_version)
+{
+    char *db_version = "\0";
+    for(short i = 0; i < MAX_SUPPORTED_ODS; i++)
+    {
+        if (ods_version == supported_ods[i])
+        {
+            db_version = supported_db[i];
+        }
+    }
+    return db_version;
+}
+
 void help(char *name)
 {
     printf("Usage %s [options]\n"
@@ -92,7 +105,6 @@ int parse(int argc, char *argv[])
                 goodbye = 1;
                 break;
             case 'b':
-                //todo: change atoi to strtol
                 block_size = (short) atoi(optarg);
                 if ((block_size != 512) && (block_size != 4096))
                 {
@@ -146,6 +158,11 @@ int main(int argc, char *argv[]) {
     if (goodbye)
         return 0;
 
+    if (!trim)
+    {
+        mylog(1, "Dry run mode\n");
+    }
+
     int fd;
     if (trim)
     {
@@ -167,10 +184,9 @@ int main(int argc, char *argv[]) {
     read(fd, &ods_version, sizeof(ods_version));
     sprintf(message, "Page size %d\n", page_size);
     mylog(1, message);
-    sprintf(message, "ODS version %x\n", ods_version);
+    sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str(ods_version));
     mylog(1, message);
 
-    //todo: Добавить проверку на shutdown или backup lock
     if (trim)
     {
         USHORT hdr_flags;
@@ -213,7 +229,7 @@ int main(int argc, char *argv[]) {
     long i = 0;
     stat(db_filename, &fstat);
     long total_pages = fstat.st_size / page_size;
-    //todo: Проверить, что на заполненной БД не возникает ошибки с pip_page->min
+
     for(i = pip_page->min; i < total_pages; i++)
     {
         //Read next pip?

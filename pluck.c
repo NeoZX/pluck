@@ -52,6 +52,19 @@ int is_supported_ods(unsigned short ods_version)
     return 0;
 }
 
+char *ods2str(unsigned short ods_version)
+{
+    char *db_version = "\0";
+    for(short i = 0; i < MAX_SUPPORTED_ODS; i++)
+    {
+        if (ods_version == supported_ods[i])
+        {
+            db_version = supported_db[i];
+        }
+    }
+    return db_version;
+}
+
 void help(char *name)
 {
     printf("Usage %s [options]\n"
@@ -172,7 +185,7 @@ int main(int argc, char *argv[]) {
     read(fd, &ods_version, sizeof(ods_version));
     sprintf(message, "Page size %d\n", page_size);
     mylog(1, message);
-    sprintf(message, "ODS version %x\n", ods_version);
+    sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str(ods_version));
     mylog(1, message);
 
     //todo: Добавить проверку на shutdown или backup lock

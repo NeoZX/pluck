@@ -188,7 +188,6 @@ int main(int argc, char *argv[]) {
     sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str(ods_version));
     mylog(1, message);
 
-    //todo: Добавить проверку на shutdown или backup lock
     if (trim)
     {
         USHORT hdr_flags;

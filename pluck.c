@@ -105,7 +105,6 @@ int parse(int argc, char *argv[])
                 goodbye = 1;
                 break;
             case 'b':
-                //todo: change atoi to strtol
                 block_size = (short) atoi(optarg);
                 if ((block_size != 512) && (block_size != 4096))
                 {
@@ -230,7 +229,7 @@ int main(int argc, char *argv[]) {
     long i = 0;
     stat(db_filename, &fstat);
     long total_pages = fstat.st_size / page_size;
-    //todo: Проверить, что на заполненной БД не возникает ошибки с pip_page->min
+
     for(i = pip_page->min; i < total_pages; i++)
     {
         //Read next pip?

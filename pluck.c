@@ -250,28 +250,16 @@ int main(int argc, char *argv[]) {
         {
             if ((pip_page->bits[i % pages_in_pip / 8]) & (0x01 << i % 8))
             {
-                //Trim page only types 5,6,7,8 (date, i-root, b-tree, blob)
-                if (pread(fd, &page_header, sizeof(page_header), i * page_size) != sizeof(page_header))
+                pages_for_trim++;
+                //trim
+                sprintf(message, "trim page %lu\n", i + 1);
+                mylog(2, message);
+                if (trim)
                 {
-                    fprintf(stderr, "Error read at %lu\n", i * page_size);
-                    return ERR_IO;
-                }
-                if ((page_header.page_type == PT_DATA)
-                    || (page_header.page_type == PT_INDEX_ROOT)
-                    || (page_header.page_type == PT_B_TREE)
-                    || (page_header.page_type == PT_BLOB))
-                {
-                    pages_for_trim++;
-                    //trim
-                    sprintf(message, "trim page %lu\n", i + 1);
-                    mylog(2, message);
-                    if (trim)
+                    if (fallocate(fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE, i * page_size, page_size))
                     {
-                        if (fallocate(fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE, i * page_size + block_size, page_size - block_size))
-                        {
-                            fprintf(stderr, "fallocate failed\n");
-                            return ERR_TRIM;
-                        }
+                        fprintf(stderr, "fallocate failed\n");
+                        return ERR_TRIM;
                     }
                 }
             }
@@ -279,7 +267,7 @@ int main(int argc, char *argv[]) {
     }
     free(pip_page);
     close(fd);
-    sprintf(message, "Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * (page_size - block_size));
+    sprintf(message, "Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * page_size);
     mylog(1, message);
 
     return 0;

@@ -179,9 +179,8 @@ int main(int argc, char *argv[]) {
     }
 
     //read page_size & ods_version
-    lseek(fd, 0x10, SEEK_SET);
-    read(fd, &page_size, sizeof(page_size));
-    read(fd, &ods_version, sizeof(ods_version));
+    pread(fd, &page_size, sizeof(page_size), 0x10);
+    pread(fd, &ods_version, sizeof(ods_version), 0x12);
     sprintf(message, "Page size %d\n", page_size);
     mylog(1, message);
     sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str(ods_version));
@@ -190,8 +189,7 @@ int main(int argc, char *argv[]) {
     if (trim)
     {
         USHORT hdr_flags;
-        lseek(fd, 0x2a, SEEK_SET);
-        if (read(fd, &hdr_flags, sizeof(hdr_flags)) == sizeof(hdr_flags))
+        if (pread(fd, &hdr_flags, sizeof(hdr_flags), 0x2a) == sizeof(hdr_flags))
         {
             //Check database full shutdown or nbackup lock
             if (((hdr_flags & 0x1080) != 0x1000) && ((hdr_flags & 0xC00) != 0x400))
@@ -223,8 +221,7 @@ int main(int argc, char *argv[]) {
     unsigned int pages_in_pip;
     pages_in_pip = (page_size - sizeof(pip_page->header) - sizeof(pip_page->min)) * 8;
     pip_page = malloc(page_size);
-    lseek(fd, 1 * page_size, SEEK_SET);
-    read(fd, pip_page, page_size);
+    pread(fd, pip_page, page_size, 1 * page_size);
 
     long i = 0;
     stat(db_filename, &fstat);
@@ -237,8 +234,7 @@ int main(int argc, char *argv[]) {
         {
             sprintf(message, "Read %d pip page %lu\n", pip_num + 1, i);
             mylog(2, message);
-            lseek(fd, i * page_size, SEEK_SET);
-            if (read(fd, pip_page, page_size) != page_size)
+            if (pread(fd, pip_page, page_size, i * page_size) != page_size)
             {
                 fprintf(stderr, "Error read page %lu\n", i);
                 return ERR_IO;
@@ -255,8 +251,7 @@ int main(int argc, char *argv[]) {
             if ((pip_page->bits[i % pages_in_pip / 8]) & (0x01 << i % 8))
             {
                 //Trim page only types 5,6,7,8 (date, i-root, b-tree, blob)
-                lseek(fd, i * page_size, SEEK_SET);
-                if (read(fd, &page_header, sizeof(page_header)) != sizeof(page_header))
+                if (pread(fd, &page_header, sizeof(page_header), i * page_size) != sizeof(page_header))
                 {
                     fprintf(stderr, "Error read at %lu\n", i * page_size);
                     return ERR_IO;

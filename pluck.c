@@ -256,7 +256,8 @@ int main(int argc, char *argv[]) {
                     fprintf(stderr, "Error read at %lu\n", i * page_size);
                     return ERR_IO;
                 }
-                if ((page_header.page_type == PT_DATA)
+                if ((page_header.page_type == PT_UNDEFINED_PAGE)
+                    || (page_header.page_type == PT_DATA)
                     || (page_header.page_type == PT_INDEX_ROOT)
                     || (page_header.page_type == PT_B_TREE)
                     || (page_header.page_type == PT_BLOB))
@@ -267,7 +268,7 @@ int main(int argc, char *argv[]) {
                     mylog(2, message);
                     if (trim)
                     {
-                        if (fallocate(fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE, i * page_size + block_size, page_size - block_size))
+                        if (fallocate(fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE, i * page_size, page_size))
                         {
                             fprintf(stderr, "fallocate failed\n");
                             return ERR_TRIM;
@@ -279,7 +280,7 @@ int main(int argc, char *argv[]) {
     }
     free(pip_page);
     close(fd);
-    sprintf(message, "Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * (page_size - block_size));
+    sprintf(message, "Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * page_size);
     mylog(1, message);
 
     return 0;

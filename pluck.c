@@ -16,23 +16,23 @@
 #define ERR_TRIM 3
 #define ERR_DB_NOT_LOCKED 4
 
-#define MAX_SUPPORTED_ODS 6
+#define MAX_SUPPORTED_ODS 2
 const unsigned short supported_ods[MAX_SUPPORTED_ODS] = {
         //0x000A, //Firebird 1.X
         0x800B, //Firebird 2.X
-        0x800C, //Firebird 3.X
-        0x800D, //Firebird 4.X
+        //0x800C, //Firebird 3.X
+        //0x800D, //Firebird 4.X
         0xE002, //RedDatabase 2.X
-        0xE00C, //RedDatabase 3.X
-        0xE00D,  //RedDatabase 4.X
+        //0xE00C, //RedDatabase 3.X
+        //0xE00D,  //RedDatabase 4.X
 };
 const char* supported_db[MAX_SUPPORTED_ODS] = {
         "Firebird 2.X",
-        "Firebird 3.X",
-        "Firebird 4.X",
+        //"Firebird 3.X",
+        //"Firebird 4.X",
         "RedDatabase 2.X",
-        "RedDatabase 3.X",
-        "RedDatabase 4.X",
+        //"RedDatabase 3.X",
+        //"RedDatabase 4.X",
 };
 
 short goodbye = 0;

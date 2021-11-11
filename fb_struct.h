@@ -5,15 +5,14 @@
 #ifndef FB_TRIM_FB_STRUCT_H
 #define FB_TRIM_FB_STRUCT_H
 
-#define SCHAR signed char
-#define UCHAR unsigned char
-#define SSHORT signed short
-#define USHORT unsigned short
-#define SLONG signed int
-#define ULONG unsigned int
+typedef signed char SCHAR;
+typedef unsigned char UCHAR;
+typedef signed short SSHORT;
+typedef unsigned short USHORT;
+typedef signed int SLONG;
+typedef unsigned int ULONG;
 
-struct page_header
-{
+struct page_header {
     SCHAR page_type;
     UCHAR page_flags;
     USHORT pag_checksum;
@@ -22,20 +21,17 @@ struct page_header
     ULONG reserved;
 };
 
-struct data_page
-{
+struct data_page {
     SLONG dpg_sequence;
     USHORT relation;
     USHORT count;
 };
-struct dpg_repeat
-{
+struct dpg_repeat {
     USHORT dpg_offset;
     USHORT dpg_length;
 };
 
-struct pip_page
-{
+struct pip_page {
     struct page_header header;
     SLONG min;
     UCHAR bits[1];
@@ -53,7 +49,7 @@ struct pip_page
 #define PT_GENERATOR 9
 #define PT_WRITE_AHEAD_LOG 10
 #define MAX_PAGE_TYPE 11
-const char* page_type_name[MAX_PAGE_TYPE] = {
+const char *page_type_name[MAX_PAGE_TYPE] = {
         "undefined",
         "header page",
         "page inventory page",

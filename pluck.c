@@ -1,9 +1,11 @@
 #include <stdio.h>
+#include <stddef.h>
 #include <getopt.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <malloc.h>
 #include <sys/stat.h>
+#include <math.h>
 
 #include <linux/falloc.h>
 #include <stdlib.h>
@@ -17,30 +19,29 @@
 #define ERR_DB_NOT_LOCKED 4
 
 #define MAX_SUPPORTED_ODS 2
-const unsigned short supported_ods[MAX_SUPPORTED_ODS] =
-        {
-                //0x000A, //Firebird 1.X
-                0x800B, //Firebird 2.X
-                //0x800C, //Firebird 3.X
-                //0x800D, //Firebird 4.X
-                0xE002, //RedDatabase 2.X
-                //0xE00C, //RedDatabase 3.X
-                //0xE00D,  //RedDatabase 4.X
-        };
-const char *supported_db[MAX_SUPPORTED_ODS] =
-        {
-                "Firebird 2.X",
-                //"Firebird 3.X",
-                //"Firebird 4.X",
-                "RedDatabase 2.X",
-                //"RedDatabase 3.X",
-                //"RedDatabase 4.X",
-        };
+const unsigned short supported_ods[MAX_SUPPORTED_ODS] = {
+        //0x000A, //Firebird 1.X
+        0x800B, //Firebird 2.X
+        //0x800C, //Firebird 3.X
+        //0x800D, //Firebird 4.X
+        0xE002, //RedDatabase 2.X
+        //0xE00C, //RedDatabase 3.X
+        //0xE00D,  //RedDatabase 4.X
+};
+const char *supported_db[MAX_SUPPORTED_ODS] = {
+        "Firebird 2.X",
+        //"Firebird 3.X",
+        //"Firebird 4.X",
+        "RedDatabase 2.X",
+        //"RedDatabase 3.X",
+        //"RedDatabase 4.X",
+};
 
 short goodbye = 0;
-#define DEFAULT_BLOCK_SIZE 512
+#define DEFAULT_BLOCK_SIZE 4096
 short block_size = DEFAULT_BLOCK_SIZE;
 short trim = 0; //Default dry-run
+short stage = 2;
 short log_level = 1;
 char *db_filename;
 
@@ -68,8 +69,11 @@ void help(char *name) {
            "Available options:\n"
            "\t-h help\n"
            "\t-v version\n"
-           "\t-b block size 512 or 4096, default 512\n"
+           "\t-b block size 512 or 4096, default 4096\n"
            "\t-t trim\n"
+           "\t-s stage 1 or 2, default 2\n"
+           "\t\tstage 1 - search for free page using PIP\n"
+           "\t\tstage 2 - stage 1, then search for unused blocks on pages\n"
            "\t-d log level\n"
            "\t-f database.fdb\n", name);
 }
@@ -83,7 +87,7 @@ void version(char *name) {
 }
 
 int parse(int argc, char *argv[]) {
-    char *opts = "hvtb:d:f:";
+    char *opts = "hvtb:d:f:s:";
     int opt;
     while ((opt = getopt(argc, argv, opts)) != -1) {
         switch (opt) {
@@ -96,9 +100,11 @@ int parse(int argc, char *argv[]) {
                 goodbye = 1;
                 break;
             case 'b':
+                //todo: change atoi to strtol
                 block_size = (short) atoi(optarg);
                 if ((block_size != 512) && (block_size != 4096)) {
-                    fprintf(stderr, "Wrong block size %s\n", optarg);
+                    printf("Wrong block size %s\n", optarg);
+                    goodbye = 2;
                 }
                 break;
             case 't':
@@ -109,6 +115,13 @@ int parse(int argc, char *argv[]) {
                 break;
             case 'f':
                 db_filename = optarg;
+                break;
+            case 's':
+                stage = (short) atoi(optarg);
+                if ((stage != 1) && (stage != 2)) {
+                    printf("Stage must be 1 or 2, not %d\n", stage);
+                    goodbye = 2;
+                }
                 break;
             default:
                 fprintf(stderr, "Unknown argument %s\n", optarg);
@@ -127,9 +140,20 @@ int mylog(int level, char *message) {
 int main(int argc, char *argv[]) {
     USHORT page_size;
     USHORT ods_version;
-    struct pip_page *pip_page;
+    struct page_header *page_header;
+    struct pip_page_ods11 *pip_page;
+    struct data_page *data_page;
+    struct blob_page *blob_page;
+    struct btree_page_ods11 *btree_page;
     struct stat fstat;
+    char *page;
+    unsigned long page_bitmap;  //MAX_PAGE_SIZE / min(block_size) = 32768 / 512 = 64 bit
+    unsigned long page_bitmap_fill = -1;
+    unsigned long data_page_bitmap_fill;
+    unsigned long blob_page_bitmap_fill;
+    unsigned long btree_page_bitmap_fill;
     long pages_for_trim = 0;
+    long blocks_for_trim = 0;
     char message[128];
 
     if (argc == 1) {
@@ -141,8 +165,8 @@ int main(int argc, char *argv[]) {
         help(argv[0]);
         return 0;
     }
-    if (goodbye)
-        return 0;
+    if (goodbye > 0)
+        return goodbye - 1;
 
     if (!trim) {
         mylog(1, "Dry run mode\n");
@@ -160,18 +184,34 @@ int main(int argc, char *argv[]) {
     }
 
     //read page_size & ods_version
-    pread(fd, &page_size, sizeof(page_size), 0x10);
-    pread(fd, &ods_version, sizeof(ods_version), 0x12);
+    pread(fd, &page_size, sizeof(page_size), offsetof(struct header_page, hdr_page_size));
+    pread(fd, &ods_version, sizeof(ods_version), offsetof(struct header_page, hdr_ods_version));
     sprintf(message, "Page size %d\n", page_size);
     mylog(1, message);
     sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str(ods_version));
     mylog(1, message);
 
+    page = malloc(page_size);
+    page_header = (struct page_header *) page;
+    page_bitmap_fill = page_bitmap_fill >> (8 * sizeof(page_bitmap_fill) - page_size / block_size);
+    data_page_bitmap_fill = 0;
+    for (int bit = 0; bit <= (offsetof(struct data_page, dpg_rpt)) / block_size; bit++) {
+        data_page_bitmap_fill |= 1UL << bit;
+    }
+    blob_page_bitmap_fill = 0;
+    for (int bit = 0; bit <= (offsetof(struct blob_page, blp_page)) / block_size; bit++) {
+        blob_page_bitmap_fill |= 1UL << bit;
+    }
+    btree_page_bitmap_fill = 0;
+    for (int bit = 0; bit <= (offsetof(struct btree_page_ods11, btr_nodes)) / block_size; bit++) {
+        btree_page_bitmap_fill |= 1UL << bit;
+    }
+
     if (trim) {
         USHORT hdr_flags;
-        if (pread(fd, &hdr_flags, sizeof(hdr_flags), 0x2a) == sizeof(hdr_flags)) {
+        if (pread(fd, &hdr_flags, sizeof(hdr_flags), offsetof(struct header_page, hdr_flags)) == sizeof(hdr_flags)) {
             //Check database full shutdown or nbackup lock
-            if (((hdr_flags & 0x1080) != 0x1000) && ((hdr_flags & 0xC00) != 0x400)) {
+            if (((hdr_flags & hdr_shutdown_mask) != hdr_shutdown_full) && ((hdr_flags & hdr_backup_mask) != hdr_nbak_stalled)) {
                 fprintf(stderr, "Database must be full shutdown or nbackup lock\n");
                 return ERR_DB_NOT_LOCKED;
             }
@@ -195,13 +235,13 @@ int main(int argc, char *argv[]) {
     unsigned int pages_in_pip;
     pages_in_pip = (page_size - sizeof(pip_page->header) - sizeof(pip_page->min)) * 8;
     pip_page = malloc(page_size);
-    pread(fd, pip_page, page_size, 1 * page_size);
+    pread(fd, pip_page, page_size, FIRST_PIP_PAGE * page_size);
 
     long i = 0;
     stat(db_filename, &fstat);
     long total_pages = fstat.st_size / page_size;
 
-    for (i = pip_page->min; i < total_pages; i++) {
+    for (i = 2; i < total_pages; i++) {
         //Read next pip?
         if (i + 1 == pip_num * pages_in_pip) {
             sprintf(message, "Read %d pip page %lu\n", pip_num + 1, i);
@@ -216,6 +256,7 @@ int main(int argc, char *argv[]) {
             }
             pip_num++;
         } else {
+            //Stage 1: check page in PIP
             if ((pip_page->bits[i % pages_in_pip / 8]) & (0x01 << i % 8)) {
                 pages_for_trim++;
                 //trim
@@ -227,13 +268,101 @@ int main(int argc, char *argv[]) {
                         return ERR_TRIM;
                     }
                 }
+            } else {
+                //Stage 2: Analyze page filling
+                if (stage == 2) {
+                    if (pread(fd, page, page_size, i * page_size) == page_size) {
+                        page_header = (struct page_header *) page;
+                        page_bitmap = 0;
+                        switch (page_header->page_type) {
+                            case PT_DATA:
+                                data_page = (struct data_page *) page;
+                                page_bitmap = data_page_bitmap_fill;
+                                for (int bit = (int) (offsetof(struct data_page, dpg_rpt)) / block_size;
+                                     bit <= (offsetof(struct data_page, dpg_rpt) +
+                                             sizeof(struct dpg_repeat) * data_page->count) / block_size;
+                                     bit++)
+                                {
+                                    page_bitmap |= 1UL << bit;
+                                }
+                                for (unsigned short cnt = 0; cnt < data_page->count; cnt++) {
+                                    const int low_bit = data_page->dpg_rpt[cnt].dpg_offset / block_size;
+                                    const int high_bit = (data_page->dpg_rpt[cnt].dpg_offset +
+                                                          data_page->dpg_rpt[cnt].dpg_length - 1) / block_size;
+                                    for (int bit = low_bit; bit <= high_bit; bit++) {
+                                        page_bitmap |= 1UL << bit;
+                                    }
+                                }
+                                break;
+                            case PT_B_TREE:
+                                btree_page = (struct btree_page_ods11 *) page;
+                                if (offsetof(struct btree_page_ods11, btr_nodes) + btree_page->btr_length
+                                        >= page_size - block_size)
+                                {
+                                    page_bitmap = page_bitmap_fill;
+                                } else {
+                                    page_bitmap = btree_page_bitmap_fill;
+                                    const int low_bit =
+                                            (int) (offsetof(struct btree_page_ods11, btr_nodes)) / block_size;
+                                    const int high_bit = (int) (offsetof(struct btree_page_ods11, btr_nodes)
+                                            + btree_page->btr_length) / block_size;
+                                    for (int bit = low_bit; bit <= high_bit; bit++) {
+                                        page_bitmap |= 1UL << bit;
+                                    }
+                                }
+                                break;
+                            case PT_BLOB:
+                                blob_page = (struct blob_page *) page;
+                                if (offsetof(struct blob_page, blp_page) + blob_page->blp_length >= page_size - block_size) {
+                                    page_bitmap = page_bitmap_fill;
+                                } else {
+                                    page_bitmap = blob_page_bitmap_fill;
+                                    const int low_bit = (int) (offsetof(struct blob_page, blp_page)) / block_size;
+                                    const int high_bit =
+                                            (int) (offsetof(struct blob_page, blp_page) + blob_page->blp_length) / block_size;
+                                    for (int bit = low_bit; bit <= high_bit; bit++) {
+                                        page_bitmap |= 1UL << bit;
+                                    }
+                                }
+                                break;
+                        }
+
+                        //Trim blocks
+                        if ((page_bitmap < page_bitmap_fill) && (page_bitmap != 0)) {
+                            sprintf(message, "Page %lu (%s), bitmap 0x%lx\n", i,
+                                    page_type_name[page_header->page_type], page_bitmap);
+                            mylog(3, message);
+                            //blocks for trim
+                            for (int bit = 0; bit < page_size / block_size; bit++) {
+                                if (!(page_bitmap & (1UL << bit))) {
+                                    blocks_for_trim++;
+                                    if (trim) {
+                                        if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                                                      i * page_size + bit * block_size, block_size)) {
+                                            fprintf(stderr, "fallocate failed\n");
+                                            return ERR_TRIM;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        free(page);
+                        return ERR_IO;
+                    }
+                }
             }
         }
     }
+    free(page);
     free(pip_page);
     close(fd);
-    sprintf(message, "Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * page_size);
+    sprintf(message, "Stage 1: Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * page_size);
     mylog(1, message);
+    if (stage == 2) {
+        sprintf(message, "Stage 2: Blocks for trim %ld (%ld bytes)\n", blocks_for_trim, blocks_for_trim * block_size);
+        mylog(1, message);
+    }
 
     return 0;
 }

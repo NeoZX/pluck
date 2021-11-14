@@ -145,7 +145,7 @@ int main(int argc, char *argv[]) {
     struct data_page *data_page;
     struct blob_page *blob_page;
     struct btree_page_ods11 *btree_page;
-    struct stat fstat;
+    struct stat fstat_before, fstat_after;
     char *page;
     unsigned long page_bitmap;  //MAX_PAGE_SIZE / min(block_size) = 32768 / 512 = 64 bit
     unsigned long page_bitmap_fill = -1;
@@ -238,8 +238,8 @@ int main(int argc, char *argv[]) {
     pread(fd, pip_page, page_size, FIRST_PIP_PAGE * page_size);
 
     long i = 0;
-    stat(db_filename, &fstat);
-    long total_pages = fstat.st_size / page_size;
+    stat(db_filename, &fstat_before);
+    long total_pages = fstat_before.st_size / page_size;
 
     for (i = 2; i < total_pages; i++) {
         //Read next pip?
@@ -261,7 +261,7 @@ int main(int argc, char *argv[]) {
                 pages_for_trim++;
                 //trim
                 sprintf(message, "trim page %lu\n", i + 1);
-                mylog(2, message);
+                mylog(3, message);
                 if (trim) {
                     if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, i * page_size, page_size)) {
                         fprintf(stderr, "fallocate failed\n");
@@ -363,6 +363,10 @@ int main(int argc, char *argv[]) {
         sprintf(message, "Stage 2: Blocks for trim %ld (%ld bytes)\n", blocks_for_trim, blocks_for_trim * block_size);
         mylog(1, message);
     }
-
+    stat(db_filename, &fstat_after);
+    const long file_size_reduced = (fstat_before.st_blocks - fstat_after.st_blocks) * fstat_after.st_blksize;
+    sprintf(message, "FS block usage reduced from %ld to %ld (FS block size %ld)\nReleased %ld bytes",
+            fstat_before.st_blocks, fstat_after.st_blocks, fstat_after.st_blksize, file_size_reduced);
+    mylog(2, message);
     return 0;
 }

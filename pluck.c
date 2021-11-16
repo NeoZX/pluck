@@ -158,17 +158,13 @@ int main(int argc, char *argv[]) {
     long blocks_for_trim = 0;
     char message[128];
 
-    if (argc == 1) {
-        help(argv[0]);
-        return 0;
-    }
     parse(argc, argv);
+    if (goodbye > 0)
+        return goodbye - 1;
     if (!db_filename) {
         help(argv[0]);
         return 0;
     }
-    if (goodbye > 0)
-        return goodbye - 1;
 
     if (!trim) {
         mylog(1, "Dry run mode\n");

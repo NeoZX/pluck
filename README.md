@@ -1,6 +1,8 @@
-# About the project
-This utility is designed to reduce the size of the database without performing backup and restore operations. This may be necessary in some cases.
+[EN](README.md) [RU](README.ru.md)
 
+# About the project
+This utility is designed to reduce the size of the database without performing 
+backup and restore operations. This may be necessary in some cases.
 
 # Requirements
 * glibс 2.18 (support for FALLOC_FL_* flags)

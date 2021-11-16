@@ -11,6 +11,7 @@
 #include <stdlib.h>
 
 #include "fb_struct.h"
+#include "commit.h"
 
 #define PLUCK_VERSION "0.1"
 
@@ -81,7 +82,7 @@ void help(char *name) {
 }
 
 void version(char *name) {
-    printf("%s version " PLUCK_VERSION "\n", name);
+    printf("%s version " PLUCK_VERSION " " COMMIT_HASH "\n", name);
     printf("Supported ODS:\n");
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
         printf("\tODS 0x%X - %s\n", supported_ods[i], supported_db[i]);

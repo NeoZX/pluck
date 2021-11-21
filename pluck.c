@@ -190,6 +190,15 @@ int main(int argc, char *argv[]) {
     sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str(ods_version));
     mylog(1, message);
 
+    if (block_size > page_size) {
+        fprintf(stderr, "block size (%d) is large that page size (%d)\n", block_size, page_size);
+        return 1;
+    }
+    if ((block_size == page_size) && (stage == 2)) {
+        sprintf(message, "block size (%d) is equal page size (%d), set stage = 1\n", block_size, page_size);
+        mylog(1, message);
+    }
+
     page = malloc(page_size);
     page_header = (struct page_header *) page;
     page_bitmap_fill = page_bitmap_fill >> (8 * sizeof(page_bitmap_fill) - page_size / block_size);
@@ -220,10 +229,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (page_size <= block_size) {
-        fprintf(stderr, "Page size (%d) less or equal block size (%d)\n", page_size, block_size);
-        return ERR_IO;
-    }
     if (!is_supported_ods(ods_version)) {
         fprintf(stderr, "Unsupported ODS version\n");
         return ERR_UNSUPPORTED_ODS;

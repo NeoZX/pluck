@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
-project(pluck C)
+project(pluck VERSION 0.1 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 99)
 
-exec_program(/usr/bin/git ${PROJECT_SOURCE_DIR}
-        ARGS show -s --format='\#define COMMIT_HASH \"%H\"' >commit.h)
+execute_process(COMMAND /usr/bin/git show -s --format="%H"
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+        OUTPUT_VARIABLE COMMIT_HASH)
+configure_file(${PROJECT_SOURCE_DIR}/commit.h.in ${PROJECT_SOURCE_DIR}/commit.h)
 add_executable(pluck pluck.c fb_struct.h commit.h)

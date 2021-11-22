@@ -1,0 +1,2 @@
+#cmakedefine pluck_VERSION "@pluck_VERSION@"
+#cmakedefine COMMIT_HASH @COMMIT_HASH@

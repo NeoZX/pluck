@@ -136,9 +136,9 @@ const ULONG FIRST_PIP_PAGE = 1;
 #define PT_BLOB 8
 #define PT_GENERATOR 9
 #define PT_WRITE_AHEAD_LOG 10
-#define MAX_PAGE_TYPE 11
+#define MAX_PAGE_TYPE 10
 
-const char *page_type_name[MAX_PAGE_TYPE] = {
+const char *page_type_name[MAX_PAGE_TYPE + 1] = {
         "undefined",
         "header page",
         "page inventory page",

@@ -19,23 +19,23 @@
 #define ERR_TRIM 3
 #define ERR_DB_NOT_LOCKED 4
 
-#define MAX_SUPPORTED_ODS 2
+#define MAX_SUPPORTED_ODS 6
 const unsigned short supported_ods[MAX_SUPPORTED_ODS] = {
         //0x000A, //Firebird 1.X
         0x800B, //Firebird 2.X
-        //0x800C, //Firebird 3.X
-        //0x800D, //Firebird 4.X
+        0x800C, //Firebird 3.X
+        0x800D, //Firebird 4.X
         0xE002, //RedDatabase 2.X
-        //0xE00C, //RedDatabase 3.X
-        //0xE00D,  //RedDatabase 4.X
+        0xE00C, //RedDatabase 3.X
+        0xE00D,  //RedDatabase 4.X
 };
 const char *supported_db[MAX_SUPPORTED_ODS] = {
         "Firebird 2.X",
-        //"Firebird 3.X",
-        //"Firebird 4.X",
+        "Firebird 3.X",
+        "Firebird 4.X",
         "RedDatabase 2.X",
-        //"RedDatabase 3.X",
-        //"RedDatabase 4.X",
+        "RedDatabase 3.X",
+        "RedDatabase 4.X",
 };
 
 short goodbye = 0;
@@ -48,10 +48,11 @@ char *db_filename;
 int fd;
 long total_pages;
 USHORT page_size;
+USHORT ods_version;
 long pages_for_trim = 0;
 long blocks_for_trim = 0;
 
-int is_supported_ods(unsigned short ods_version) {
+int is_supported_ods() {
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
         if (ods_version == supported_ods[i])
             return 1;
@@ -59,7 +60,7 @@ int is_supported_ods(unsigned short ods_version) {
     return 0;
 }
 
-char *ods2str(unsigned short ods_version) {
+char *ods2str() {
     char *db_version = "\0";
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
         if (ods_version == supported_ods[i]) {
@@ -145,35 +146,63 @@ int mylog(int level, char *message) {
 
 int stage1(void)
 {
-    struct pip_page_ods11 *pip_page;
+    struct page_header *page;
+    struct pip {
+        UCHAR bits[1];
+    };
+    struct pip *pip;
+    ULONG *pip_min;
+    //struct pip_page_ods11 *pip_page;
     char message[128];
 
     //read first pip page
     short pip_num = 1;
-    unsigned int pages_in_pip;
-    pages_in_pip = (page_size - sizeof(pip_page->header) - sizeof(pip_page->min)) * 8;
-    pip_page = malloc(page_size);
-    pread(fd, pip_page, page_size, FIRST_PIP_PAGE * page_size);
+    ULONG pages_in_pip;
+    page = malloc(page_size);
+    switch (ods_version) {
+        case 0x800B: //Firebird 2.X
+        case 0xE002: //RedDatabase 2.X
+            pip = (struct pip *) page + offsetof(struct pip_page_ods11, bits);
+            pip_min = (ULONG *) page + offsetof(struct pip_page_ods11, min);
+            pages_in_pip = (page_size - offsetof(struct pip_page_ods11, bits)) * 8;
+            break;
+        case 0x800C: //Firebird 3.X
+        case 0xE00C: //RedDatabase 3.X
+        case 0x800D: //Firebird 4.X
+        case 0xE00D: //RedDatabase 4.X
+            pip = (struct pip *) page + offsetof(struct pip_page_ods12, bits);
+            pip_min = (ULONG *) page + offsetof(struct pip_page_ods12, min);
+            pages_in_pip = (page_size - offsetof(struct pip_page_ods12, bits)) * 8;
+            break;
+        default:
+            return ERR_UNSUPPORTED_ODS;
+            break;
+    }
+    if (pread(fd, page, page_size, FIRST_PIP_PAGE * page_size) != page_size) {
+        fprintf(stderr, "Error read page %u\n", FIRST_PIP_PAGE);
+        free(page);
+        return ERR_IO;
+    }
 
-    for (long i = 2; i < total_pages; i++) {
+    for (long i = *pip_min; i < total_pages; i++) {
         //Read next pip?
         if (i + 1 == pip_num * pages_in_pip) {
             sprintf(message, "Read %d pip page %lu\n", pip_num + 1, i);
             mylog(2, message);
-            if (pread(fd, pip_page, page_size, i * page_size) != page_size) {
+            if (pread(fd, page, page_size, i * page_size) != page_size) {
                 fprintf(stderr, "Error read page %lu\n", i);
-                free(pip_page);
+                free(page);
                 return ERR_IO;
             }
-            if (pip_page->header.page_type != PT_PAGE_INVENTORY) {
+            if (page->page_type != PT_PAGE_INVENTORY) {
                 fprintf(stderr, "Page %lu is not pip!\n", i);
-                free(pip_page);
+                free(page);
                 return ERR_IO;
             }
             pip_num++;
         } else {
             //Stage 1: check page in PIP
-            if ((pip_page->bits[i % pages_in_pip / 8]) & (0x01 << i % 8)) {
+            if ((pip->bits[i % pages_in_pip / 8]) & (0x01 << i % 8)) {
                 pages_for_trim++;
                 //trim
                 sprintf(message, "trim page %lu\n", i + 1);
@@ -181,14 +210,14 @@ int stage1(void)
                 if (trim) {
                     if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, i * page_size, page_size)) {
                         fprintf(stderr, "fallocate failed\n");
-                        free(pip_page);
+                        free(page);
                         return ERR_TRIM;
                     }
                 }
             }
         }
     }
-    free(pip_page);
+    free(page);
     return 0;
 }
 
@@ -198,7 +227,7 @@ int stage2(void) {
     struct page_header *page_header;
     struct data_page *data_page;
     struct blob_page *blob_page;
-    struct btree_page_ods11 *btree_page;
+    struct btree_page *btree_page;
     unsigned long page_bitmap_fill = -1;
     unsigned long data_page_bitmap_fill;
     unsigned long blob_page_bitmap_fill;
@@ -215,7 +244,7 @@ int stage2(void) {
         blob_page_bitmap_fill |= 1UL << bit;
     }
     btree_page_bitmap_fill = 0;
-    for (int bit = 0; bit <= (offsetof(struct btree_page_ods11, btr_nodes)) / block_size; bit++) {
+    for (int bit = 0; bit <= (sizeof(struct btree_page)) / block_size; bit++) {
         btree_page_bitmap_fill |= 1UL << bit;
     }
 
@@ -246,17 +275,14 @@ int stage2(void) {
                     }
                     break;
                 case PT_B_TREE:
-                    btree_page = (struct btree_page_ods11 *) page;
-                    if (offsetof(struct btree_page_ods11, btr_nodes) + btree_page->btr_length
-                        >= page_size - block_size)
+                    btree_page = (struct btree_page *) page;
+                    if (btree_page->btr_length >= page_size - block_size)
                     {
                         page_bitmap = page_bitmap_fill;
                     } else {
                         page_bitmap = btree_page_bitmap_fill;
-                        const int low_bit =
-                                (int) (offsetof(struct btree_page_ods11, btr_nodes)) / block_size;
-                        const int high_bit = (int) (offsetof(struct btree_page_ods11, btr_nodes)
-                                                    + btree_page->btr_length) / block_size;
+                        const int low_bit = (int) (sizeof(struct btree_page)) / block_size;
+                        const int high_bit = (int) (btree_page->btr_length) / block_size;
                         for (int bit = low_bit; bit <= high_bit; bit++) {
                             page_bitmap |= 1UL << bit;
                         }
@@ -308,7 +334,6 @@ int stage2(void) {
 }
 
 int main(int argc, char *argv[]) {
-    USHORT ods_version;
     struct stat fstat_before, fstat_after;
     int status;
     char message[128];
@@ -340,10 +365,10 @@ int main(int argc, char *argv[]) {
     pread(fd, &ods_version, sizeof(ods_version), offsetof(struct header_page, hdr_ods_version));
     sprintf(message, "Page size %d\n", page_size);
     mylog(1, message);
-    sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str(ods_version));
+    sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str());
     mylog(1, message);
 
-    if (!is_supported_ods(ods_version)) {
+    if (!is_supported_ods()) {
         fprintf(stderr, "Unsupported ODS version\n");
         return ERR_UNSUPPORTED_ODS;
     }

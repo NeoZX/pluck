@@ -101,17 +101,8 @@ struct pip_page_ods12 {
     ULONG pip_used;
     UCHAR bits[1];
 };
-typedef struct pip_page_ods12 pip_page_ods13;
 
-struct btree_nod_ods11
-{
-    UCHAR btn_prefix;			// size of compressed prefix
-    UCHAR btn_length;			// length of data in node
-    UCHAR btn_number[4];		// page or record number
-    UCHAR btn_data[1];
-};
-
-struct btree_page_ods11 {
+struct btree_page {
     struct page_header header;
     SLONG btr_sibling;			// right sibling page
     SLONG btr_left_sibling;		// left sibling page
@@ -120,7 +111,6 @@ struct btree_page_ods11 {
     USHORT btr_length;			// length of data in bucket
     UCHAR btr_id;				// index id for consistency
     UCHAR btr_level;			// index level (0 = leaf)
-    struct btree_nod_ods11 btr_nodes[1];
 };
 
 const ULONG FIRST_PIP_PAGE = 1;

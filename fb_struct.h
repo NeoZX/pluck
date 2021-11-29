@@ -44,25 +44,35 @@ struct header_page
 const USHORT hdr_active_shadow          = 0x1;          // 1    file is an active shadow file
 const USHORT hdr_force_write            = 0x2;          // 2    database is forced write
 const USHORT hdr_crypt_process          = 0x4;          // 4    Encryption status is changing now
-const USHORT hdr_encrypted              = 0x8;          // 8    Database is encrypted
-const USHORT hdr_no_checksums           = 0x10;         // 16   don't calculate checksums
-const USHORT hdr_no_reserve             = 0x20;         // 32   don't reserve space for versions
-const USHORT hdr_replica                = 0x40;         // 64   database is a replication target
-const USHORT hdr_SQL_dialect_3          = 0x100;        // 256  database SQL dialect 3
-const USHORT hdr_read_only              = 0x200;        // 512  Database in ReadOnly. If not set, DB is RW
+const USHORT hdr_no_reserve             = 0x8;          // 8    FB unused
+const USHORT rdb26_hdr_encrypted        = 0x8;          //      RDB2.6 database is encrypted
+const USHORT hdr_SQL_dialect_3          = 0x10;         // 16   don't calculate checksums
+const USHORT hdr_read_only              = 0x20;         // 32   don't reserve space for versions
+const USHORT hdr_encrypted              = 0x40;         // 64   FB Database is encrypted
+const USHORT rdb26_hdr_replica          = 0x40;         //      RDB2.6 database is a replication target
+// Reserved for hdr_shutdown_multi, see below           // 128
+const USHORT hdr_replica                = 0x100;        // 256  RDB3 Database is a replication target
+const USHORT fb2_hdr_SQL_dialect_3      = 0x100;        // 256  FB2 database SQL dialect 3
+const USHORT fb2_hdr_read_only          = 0x200;        // 512  FB2  Database in ReadOnly. If not set, DB is RW
 const USHORT hdr_backup_mask            = 0xC00;
 const USHORT hdr_shutdown_mask          = 0x1080;
+const USHORT hdr_replica_mask           = 0x6000;
 
 // Values for backup mask
-const USHORT hdr_nbak_normal		= 0x000;	// Normal mode. Changes are simply written to main files
-const USHORT hdr_nbak_stalled		= 0x400;	// 1024 Main files are locked. Changes are written to diff file
-const USHORT hdr_nbak_merge			= 0x800;	// 2048 Merging changes from diff file into main files
+const USHORT hdr_nbak_normal            = 0x000;        // Normal mode. Changes are simply written to main files
+const USHORT hdr_nbak_stalled           = 0x400;        // 1024 Main files are locked. Changes are written to diff file
+const USHORT hdr_nbak_merge             = 0x800;        // 2048 Merging changes from diff file into main files
 
 // Values for shutdown mask
 const USHORT hdr_shutdown_none          = 0x0;
 const USHORT hdr_shutdown_multi         = 0x80;
 const USHORT hdr_shutdown_full          = 0x1000;
 const USHORT hdr_shutdown_single        = 0x1080;
+
+// Values for replica mask
+const USHORT hdr_replica_none           = 0x0000;
+const USHORT hdr_replica_read_only      = 0x2000;
+const USHORT hdr_replica_read_write     = 0x4000;
 
 //ODS11, ODS12, ODS13
 struct blob_page {
@@ -104,13 +114,13 @@ struct pip_page_ods12 {
 
 struct btree_page {
     struct page_header header;
-    SLONG btr_sibling;			// right sibling page
-    SLONG btr_left_sibling;		// left sibling page
-    SLONG btr_prefix_total;		// sum of all prefixes on page
-    USHORT btr_relation;		// relation id for consistency
-    USHORT btr_length;			// length of data in bucket
-    UCHAR btr_id;				// index id for consistency
-    UCHAR btr_level;			// index level (0 = leaf)
+    SLONG btr_sibling;          // right sibling page
+    SLONG btr_left_sibling;     // left sibling page
+    SLONG btr_prefix_total;     // sum of all prefixes on page
+    USHORT btr_relation;        // relation id for consistency
+    USHORT btr_length;          // length of data in bucket
+    UCHAR btr_id;               // index id for consistency
+    UCHAR btr_level;            // index level (0 = leaf)
 };
 
 const ULONG FIRST_PIP_PAGE = 1;
@@ -143,5 +153,3 @@ const char *page_type_name[MAX_PAGE_TYPE + 1] = {
 };
 
 #endif //FB_TRIM_FB_STRUCT_H
-
-

@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <malloc.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <math.h>
 
@@ -18,6 +19,8 @@
 #define ERR_UNSUPPORTED_ODS 2
 #define ERR_TRIM 3
 #define ERR_DB_NOT_LOCKED 4
+
+#define MAX_THREADS 128
 
 #define MAX_SUPPORTED_ODS 6
 const unsigned short supported_ods[MAX_SUPPORTED_ODS] = {
@@ -43,6 +46,7 @@ short goodbye = 0;
 short block_size = DEFAULT_BLOCK_SIZE;
 short trim = 0; //Default dry-run
 short stage = 2;
+int threads_count = 1;
 short log_level = 1;
 char *db_filename;
 int fd;
@@ -51,6 +55,13 @@ USHORT page_size;
 USHORT ods_version;
 long pages_for_trim = 0;
 long blocks_for_trim = 0;
+struct stage2_info {
+    pthread_t thread_id;
+    int status;
+    long start;
+    long finish;
+    long blocks_for_trim;
+};
 
 int is_supported_ods() {
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
@@ -77,12 +88,13 @@ void help(char *name) {
            "\t-h help\n"
            "\t-v version\n"
            "\t-b block size 512 or 4096, default 4096\n"
-           "\t-t trim\n"
+           "\t-t trim, default off\n"
            "\t-s stage 1 or 2, default 2\n"
            "\t\tstage 1 - search for free page using PIP\n"
            "\t\tstage 2 - stage 1, then search for unused blocks on pages\n"
-           "\t-d log level\n"
-           "\t-f database.fdb\n", name);
+           "\t-p parallel threads on stage 2, between 1 and %d\n"
+           "\t-d log level 0-3, default 1\n"
+           "\t-f database.fdb\n", name, MAX_THREADS);
 }
 
 void version(char *name) {
@@ -94,7 +106,7 @@ void version(char *name) {
 }
 
 int parse(int argc, char *argv[]) {
-    char *opts = "hvtb:d:f:s:";
+    char *opts = "hvtb:d:f:s:p:";
     int opt;
     while ((opt = getopt(argc, argv, opts)) != -1) {
         switch (opt) {
@@ -127,6 +139,13 @@ int parse(int argc, char *argv[]) {
                 stage = (short) atoi(optarg);
                 if ((stage != 1) && (stage != 2)) {
                     printf("Stage must be 1 or 2, not %d\n", stage);
+                    goodbye = 2;
+                }
+                break;
+            case 'p':
+                threads_count = atoi(optarg);
+                if ((threads_count < 1) || (threads_count > MAX_THREADS)){
+                    printf("Threads count must be between 1 and %d\n", MAX_THREADS);
                     goodbye = 2;
                 }
                 break;
@@ -178,6 +197,8 @@ int stage1(void)
             return ERR_UNSUPPORTED_ODS;
             break;
     }
+    sprintf(message, "Read 1 pip page %u\n", FIRST_PIP_PAGE);
+    mylog(2, message);
     if (pread(fd, page, page_size, FIRST_PIP_PAGE * page_size) != page_size) {
         fprintf(stderr, "Error read page %u\n", FIRST_PIP_PAGE);
         free(page);
@@ -221,7 +242,10 @@ int stage1(void)
     return 0;
 }
 
-int stage2(void) {
+void * stage2(void *argv) {
+    struct stage2_info *arg;
+    arg = argv;
+
     char *page;
     unsigned long page_bitmap;  //MAX_PAGE_SIZE / min(block_size) = 32768 / 512 = 64 bit
     struct page_header *page_header;
@@ -233,6 +257,7 @@ int stage2(void) {
     unsigned long blob_page_bitmap_fill;
     unsigned long btree_page_bitmap_fill;
     char message[128];
+    long blocks_for_trim_thr = 0;
 
     page_bitmap_fill = page_bitmap_fill >> (8 * sizeof(page_bitmap_fill) - page_size / block_size);
     data_page_bitmap_fill = 0;
@@ -249,7 +274,7 @@ int stage2(void) {
     }
 
     page = malloc(page_size);
-    for (long i = 2; i < total_pages; i++) {
+    for (long i = arg->start; i < arg->finish; i++) {
         //Stage 2: Analyze page filling
         if (pread(fd, page, page_size, i * page_size) == page_size) {
             page_header = (struct page_header *) page;
@@ -314,13 +339,15 @@ int stage2(void) {
                 //blocks for trim
                 for (int bit = 0; bit < page_size / block_size; bit++) {
                     if (!(page_bitmap & (1UL << bit))) {
-                        blocks_for_trim++;
+                        blocks_for_trim_thr++;
                         if (trim) {
                             if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                                           i * page_size + bit * block_size, block_size)) {
                                 fprintf(stderr, "fallocate failed\n");
                                 free(page);
-                                return ERR_TRIM;
+                                arg->blocks_for_trim = blocks_for_trim_thr;
+                                arg->status = ERR_TRIM;
+                                return 0;
                             }
                         }
                     }
@@ -328,10 +355,14 @@ int stage2(void) {
             }
         } else {
             free(page);
-            return ERR_IO;
+            arg->blocks_for_trim = blocks_for_trim_thr;
+            arg->status = ERR_IO;
+            return 0;
         }
     }
     free(page);
+    arg->blocks_for_trim = blocks_for_trim_thr;
+    arg->status = 0;
     return 0;
 }
 
@@ -339,6 +370,7 @@ int main(int argc, char *argv[]) {
     struct stat fstat_before, fstat_after;
     int status;
     char message[128];
+    int err = 0;
 
     parse(argc, argv);
     if (goodbye > 0)
@@ -425,10 +457,22 @@ int main(int argc, char *argv[]) {
 
     //Stage 2
     if (stage == 2) {
-        status = stage2();
-        if (status != 0) {
-            close(fd);
-            return status;
+        struct stage2_info stage2_info[MAX_THREADS];
+        for (long thread = 0; thread < threads_count; thread++) {
+            stage2_info[thread].start = total_pages * (thread) / threads_count;
+            stage2_info[thread].finish = total_pages * (thread + 1) / threads_count;
+            sprintf(message, "Starting thread %ld range %ld - %ld\n",
+                    thread, stage2_info[thread].start, stage2_info[thread].finish);
+            mylog(2, message);
+            pthread_create(&(stage2_info[thread].thread_id), NULL, stage2, &stage2_info[thread]);
+        }
+        for (long thread = 0; thread < threads_count; thread++) {
+            pthread_join(stage2_info[thread].thread_id, NULL);
+            blocks_for_trim += stage2_info[thread].blocks_for_trim;
+            if (stage2_info[thread].status > 0) {
+                fprintf(stderr, "Error %d on thread %ld\n", stage2_info[thread].status, thread);
+                err = stage2_info[thread].status;
+            }
         }
     }
 
@@ -440,9 +484,11 @@ int main(int argc, char *argv[]) {
         mylog(1, message);
     }
     stat(db_filename, &fstat_after);
-    const long file_size_reduced = (fstat_before.st_blocks - fstat_after.st_blocks) * fstat_after.st_blksize;
-    sprintf(message, "FS block usage reduced from %ld to %ld (FS block size %ld)\nReleased %ld bytes",
-            fstat_before.st_blocks, fstat_after.st_blocks, fstat_after.st_blksize, file_size_reduced);
-    mylog(2, message);
-    return 0;
+    if (trim) {
+        const long file_size_reduced = (fstat_before.st_blocks - fstat_after.st_blocks) * fstat_after.st_blksize;
+        sprintf(message, "FS block usage reduced from %ld to %ld (FS block size %ld)\nReleased %ld bytes",
+                fstat_before.st_blocks, fstat_after.st_blocks, fstat_after.st_blksize, file_size_reduced);
+        mylog(2, message);
+    }
+    return err;
 }

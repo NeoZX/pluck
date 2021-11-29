@@ -8,3 +8,4 @@ execute_process(COMMAND /usr/bin/git show -s --format="%H"
         OUTPUT_VARIABLE COMMIT_HASH)
 configure_file(${PROJECT_SOURCE_DIR}/commit.h.in ${PROJECT_SOURCE_DIR}/commit.h)
 add_executable(pluck pluck.c fb_struct.h commit.h)
+target_link_libraries(pluck pthread)

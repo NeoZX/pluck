@@ -370,11 +370,15 @@ int main(int argc, char *argv[]) {
     sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str());
     mylog(1, message);
 
+    //CHECKS
+
+    //Check ODS version
     if (!is_supported_ods()) {
         fprintf(stderr, "Unsupported ODS version\n");
         return ERR_UNSUPPORTED_ODS;
     }
 
+    //Check block_size and page_size
     if (block_size > page_size) {
         fprintf(stderr, "block size (%d) is large that page size (%d)\n", block_size, page_size);
         return 1;
@@ -384,18 +388,28 @@ int main(int argc, char *argv[]) {
         mylog(1, message);
     }
 
+    //checks with database header flags
+    USHORT hdr_flags;
+    if (pread(fd, &hdr_flags, sizeof(hdr_flags), offsetof(struct header_page, hdr_flags)) != sizeof(hdr_flags)) {
+        fprintf(stderr, "Error read hdr_flags\n");
+        return ERR_IO;
+    }
+
+    //check encrypted database Firebird 3/4, Red Database 3/4
+    if ((ods_version == 0x800C) || (ods_version == 0x800D) || (ods_version == 0xE00C) || (ods_version == 0xE00D)) {
+        if ((stage == 2) && (hdr_flags & (hdr_crypt_process | hdr_encrypted))) {
+            fprintf(stderr, "Database is encrypted or is currently encrypted. Set stage = 1\n");
+            stage = 1;
+        }
+    }
+
+    //check shutdown or nbackup lock
     if (trim) {
-        USHORT hdr_flags;
-        if (pread(fd, &hdr_flags, sizeof(hdr_flags), offsetof(struct header_page, hdr_flags)) == sizeof(hdr_flags)) {
-            //Check database full shutdown or nbackup lock
-            if (((hdr_flags & hdr_shutdown_mask) != hdr_shutdown_full) &&
-                ((hdr_flags & hdr_backup_mask) != hdr_nbak_stalled)) {
-                fprintf(stderr, "Database must be full shutdown or nbackup lock\n");
-                return ERR_DB_NOT_LOCKED;
-            }
-        } else {
-            fprintf(stderr, "Error read hdr_flags\n");
-            return ERR_IO;
+        //Check database full shutdown or nbackup lock
+        if (((hdr_flags & hdr_shutdown_mask) != hdr_shutdown_full) &&
+            ((hdr_flags & hdr_backup_mask) != hdr_nbak_stalled)) {
+            fprintf(stderr, "Database must be full shutdown or nbackup lock\n");
+            return ERR_DB_NOT_LOCKED;
         }
     }
 

@@ -255,6 +255,8 @@ int stage2(void) {
             page_header = (struct page_header *) page;
             page_bitmap = 0;
             switch (page_header->page_type) {
+                case PT_UNDEFINED_PAGE:
+                    page_bitmap = 0UL;
                 case PT_DATA:
                     data_page = (struct data_page *) page;
                     page_bitmap = data_page_bitmap_fill;

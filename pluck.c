@@ -19,6 +19,7 @@
 #define ERR_UNSUPPORTED_ODS 2
 #define ERR_TRIM 3
 #define ERR_DB_NOT_LOCKED 4
+#define ERR_DB_ENCRYPTED 5
 
 #define MAX_THREADS 128
 
@@ -427,10 +428,17 @@ int main(int argc, char *argv[]) {
         return ERR_IO;
     }
 
+    //check encrypted database Red Database 2.6
+    if (ods_version == 0xE002) {
+        if (hdr_flags & (rdb26_hdr_encrypted | hdr_crypt_process)) {
+            fprintf(stderr, "Database is encrypted or is currently encrypting.\n");
+            return ERR_DB_ENCRYPTED;
+        }
+    }
     //check encrypted database Firebird 3/4, Red Database 3/4
     if ((ods_version == 0x800C) || (ods_version == 0x800D) || (ods_version == 0xE00C) || (ods_version == 0xE00D)) {
         if ((stage == 2) && (hdr_flags & (hdr_crypt_process | hdr_encrypted))) {
-            fprintf(stderr, "Database is encrypted or is currently encrypted. Set stage = 1\n");
+            fprintf(stderr, "Database is encrypted or is currently encrypting. Set stage = 1\n");
             stage = 1;
         }
     }

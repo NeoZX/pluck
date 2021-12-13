@@ -20,6 +20,8 @@ Reducing the size of the database file can be useful in some cases. For example,
 * kernel 2.6.38 when using XFS
 * kernel 3.0 when using Ext4
 
+For RHEL/CentOS 6 kernel >=2.6.32-358
+
 # Usage example
 Runs in dry run mode by default:
 

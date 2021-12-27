@@ -36,12 +36,12 @@ Trim blocks in 4 threads:
     ./pluck -p 4 -t -f database.fdb 
 
 # Restrictions
-Multi-file databases are not supported.
-Supported ODS version 11, 12, 13 (Firebird 2/3/4).
-Encrypted files in Red Database 2.6 are not supported.
-Encrypted files in Firebird 3/4 are only supported at the first stage.
-Supported block size 512 and 4096.
-Supported OS Linux.
+* Multi-file databases are not supported.
+* Supported ODS version 11, 12, 13 (Firebird 2/3/4).
+* Encrypted files in Red Database 2.6 are not supported.
+* Encrypted files in Firebird 3/4 are only supported at the first stage.
+* Supported block size 512 and 4096.
+* Supported OS Linux.
 
 # Alternatives
 Alternatively, you can use the system commands of the operating system, e.g. copy file with sparse option:

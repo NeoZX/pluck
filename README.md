@@ -12,7 +12,7 @@ When a block is freed at the file system level, the trim command is sent to the 
 
 It is not recommended to using it on HDD, as using the utility can lead to file fragmentation. On an SSD, file fragmentation has virtually no effect on read / write speed and access time.
 
-#BEWARE, STRANGER!
+# BEWARE, STRANGER!
 Reducing the size of the database file can be useful in some cases. For example, if mostly read transactions are performed in database (in OLAP models, analytics, statistics, etc.). But sometime can be situations  when the file size will be larger than the file system size. So, this situation will arise when FS has not free blocks, but it has free pages in the file. This situation can lead to unexpected errors in the operation of the DBMS.
 
 # Requirements

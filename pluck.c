@@ -6,7 +6,6 @@
 #include <malloc.h>
 #include <pthread.h>
 #include <sys/stat.h>
-#include <math.h>
 
 #include <linux/falloc.h>
 #include <stdlib.h>

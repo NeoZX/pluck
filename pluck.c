@@ -71,14 +71,13 @@ int is_supported_ods() {
     return 0;
 }
 
-char *ods2str() {
-    char *db_version = "\0";
+const char *ods2str() {
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
         if (ods_version == supported_ods[i]) {
-            db_version = supported_db[i];
+            return supported_db[i];
         }
     }
-    return db_version;
+    return "\0";
 }
 
 void help(char *name) {

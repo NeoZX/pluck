@@ -51,8 +51,7 @@ short log_level = 1;
 char *db_filename;
 int fd;
 long total_pages;
-USHORT page_size;
-USHORT ods_version;
+struct header_page header_page;
 long pages_for_trim = 0;
 long blocks_for_trim = 0;
 struct stage2_info {
@@ -65,7 +64,7 @@ struct stage2_info {
 
 int is_supported_ods() {
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
-        if (ods_version == supported_ods[i])
+        if (header_page.hdr_ods_version == supported_ods[i])
             return 1;
     }
     return 0;
@@ -73,7 +72,7 @@ int is_supported_ods() {
 
 const char *ods2str() {
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
-        if (ods_version == supported_ods[i]) {
+        if (header_page.hdr_ods_version == supported_ods[i]) {
             return supported_db[i];
         }
     }
@@ -171,6 +170,8 @@ int stage1(void)
     struct pip *pip;
     ULONG *pip_min;
     //struct pip_page_ods11 *pip_page;
+    const USHORT page_size = header_page.hdr_page_size;
+    const USHORT ods_version = header_page.hdr_ods_version;
     char message[128];
 
     //read first pip page
@@ -255,6 +256,8 @@ void * stage2(void *argv) {
     unsigned long data_page_bitmap_fill;
     unsigned long blob_page_bitmap_fill;
     unsigned long btree_page_bitmap_fill;
+    const USHORT page_size = header_page.hdr_page_size;
+    const USHORT ods_version = header_page.hdr_ods_version;
     char message[128];
     long blocks_for_trim_thr = 0;
 
@@ -395,11 +398,14 @@ int main(int argc, char *argv[]) {
     }
 
     //read page_size & ods_version
-    pread(fd, &page_size, sizeof(page_size), offsetof(struct header_page, hdr_page_size));
-    pread(fd, &ods_version, sizeof(ods_version), offsetof(struct header_page, hdr_ods_version));
-    sprintf(message, "Page size %d\n", page_size);
+    if (pread(fd, &header_page, sizeof(header_page), 0) != sizeof(header_page))
+    {
+        fprintf(stderr, "Error reading header page\n");
+        return ERR_IO;
+    }
+    sprintf(message, "Page size %d\n", header_page.hdr_page_size);
     mylog(1, message);
-    sprintf(message, "ODS version %x (%s)\n", ods_version, ods2str());
+    sprintf(message, "ODS version %x (%s)\n", header_page.hdr_ods_version, ods2str());
     mylog(1, message);
 
     //CHECKS
@@ -411,12 +417,12 @@ int main(int argc, char *argv[]) {
     }
 
     //Check block_size and page_size
-    if (block_size > page_size) {
-        fprintf(stderr, "block size (%d) is large that page size (%d)\n", block_size, page_size);
+    if (block_size > header_page.hdr_page_size) {
+        fprintf(stderr, "block size (%d) is large that page size (%d)\n", block_size, header_page.hdr_page_size);
         return 1;
     }
-    if ((block_size == page_size) && (stage == 2)) {
-        sprintf(message, "block size (%d) is equal page size (%d), set stage = 1\n", block_size, page_size);
+    if ((block_size == header_page.hdr_page_size) && (stage == 2)) {
+        sprintf(message, "block size (%d) is equal page size (%d), set stage = 1\n", block_size, header_page.hdr_page_size);
         mylog(1, message);
     }
 
@@ -428,14 +434,14 @@ int main(int argc, char *argv[]) {
     }
 
     //check encrypted database Red Database 2.6
-    if (ods_version == 0xE002) {
+    if (header_page.hdr_ods_version == 0xE002) {
         if (hdr_flags & (rdb26_hdr_encrypted | hdr_crypt_process)) {
             fprintf(stderr, "Database is encrypted or is currently encrypting.\n");
             return ERR_DB_ENCRYPTED;
         }
     }
     //check encrypted database Firebird 3/4, Red Database 3/4
-    if ((ods_version == 0x800C) || (ods_version == 0x800D) || (ods_version == 0xE00C) || (ods_version == 0xE00D)) {
+    if ((header_page.hdr_ods_version == 0x800C) || (header_page.hdr_ods_version == 0x800D) || (header_page.hdr_ods_version == 0xE00C) || (header_page.hdr_ods_version == 0xE00D)) {
         if ((stage == 2) && (hdr_flags & (hdr_crypt_process | hdr_encrypted))) {
             fprintf(stderr, "Database is encrypted or is currently encrypting. Set stage = 1\n");
             stage = 1;
@@ -453,7 +459,7 @@ int main(int argc, char *argv[]) {
     }
 
     stat(db_filename, &fstat_before);
-    total_pages = fstat_before.st_size / page_size;
+    total_pages = fstat_before.st_size / header_page.hdr_page_size;
 
     //Stage 1
     status = stage1();
@@ -484,7 +490,7 @@ int main(int argc, char *argv[]) {
     }
 
     close(fd);
-    sprintf(message, "Stage 1: Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * page_size);
+    sprintf(message, "Stage 1: Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * header_page.hdr_page_size);
     mylog(1, message);
     if (stage == 2) {
         sprintf(message, "Stage 2: Blocks for trim %ld (%ld bytes)\n", blocks_for_trim, blocks_for_trim * block_size);

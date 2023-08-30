@@ -79,6 +79,27 @@ const char *ods2str() {
     return "\0";
 }
 
+int byte2str (char *string, long size) {
+    if (size < 10240) {
+        sprintf(string, "%ld B", size);
+        return 0;
+    }
+    if (size < 10485760) {
+        sprintf(string, "%ld KiB", size / 1024);
+        return 0;
+    }
+    if (size < 10737418240) {
+        sprintf(string, "%ld MiB", size / 1048576);
+        return 0;
+    }
+    if (size < 10995116277760) {
+        sprintf(string, "%ld GiB", size / 1073741824);
+        return 0;
+    }
+    sprintf(string, "%ld TiB", size / 1099511627776);
+    return 0;
+}
+
 void help(char *name) {
     printf("Usage %s [options]\n"
            "Default dry-run\n"
@@ -374,6 +395,7 @@ int main(int argc, char *argv[]) {
     int status;
     char message[128];
     int err = 0;
+    char buf4size[32];
 
     parse(argc, argv);
     if (goodbye > 0)
@@ -468,6 +490,10 @@ int main(int argc, char *argv[]) {
         return status;
     }
 
+    byte2str(buf4size, pages_for_trim * header_page.hdr_page_size);
+    sprintf(message, "Stage 1: Pages for trim %ld (%s)\n", pages_for_trim, buf4size);
+    mylog(1, message);
+
     //Stage 2
     if (stage == 2) {
         struct stage2_info stage2_info[MAX_THREADS];
@@ -490,17 +516,17 @@ int main(int argc, char *argv[]) {
     }
 
     close(fd);
-    sprintf(message, "Stage 1: Pages for trim %ld (%ld bytes)\n", pages_for_trim, pages_for_trim * header_page.hdr_page_size);
-    mylog(1, message);
     if (stage == 2) {
-        sprintf(message, "Stage 2: Blocks for trim %ld (%ld bytes)\n", blocks_for_trim, blocks_for_trim * block_size);
+        byte2str(buf4size, blocks_for_trim * block_size);
+        sprintf(message, "Stage 2: Blocks for trim %ld (%s)\n", blocks_for_trim, buf4size);
         mylog(1, message);
     }
     stat(db_filename, &fstat_after);
     if (trim) {
         const long file_size_reduced = (fstat_before.st_blocks - fstat_after.st_blocks) * fstat_after.st_blksize;
-        sprintf(message, "FS block usage reduced from %ld to %ld (FS block size %ld)\nReleased %ld bytes",
-                fstat_before.st_blocks, fstat_after.st_blocks, fstat_after.st_blksize, file_size_reduced);
+        byte2str(buf4size, file_size_reduced);
+        sprintf(message, "FS block usage reduced from %ld to %ld (FS block size %ld)\nReleased %s\n",
+                fstat_before.st_blocks, fstat_after.st_blocks, fstat_after.st_blksize, buf4size);
         mylog(2, message);
     }
     return err;

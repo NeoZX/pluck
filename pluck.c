@@ -44,6 +44,8 @@ const char *supported_db[MAX_SUPPORTED_ODS] = {
 short goodbye = 0;
 #define DEFAULT_BLOCK_SIZE 4096
 short block_size = DEFAULT_BLOCK_SIZE;
+#define DEFAULT_PROGRESS_BAR_STEP 16777216
+int progress_bar_step = 0;
 short trim = 0; //Default dry-run
 short stage = 2;
 int threads_count = 1;
@@ -56,6 +58,7 @@ long pages_for_trim = 0;
 long blocks_for_trim = 0;
 struct stage2_info {
     pthread_t thread_id;
+    long thread_number;
     int status;
     long start;
     long finish;
@@ -112,6 +115,7 @@ void help(char *name) {
            "\t\tstage 1 - search for free page using PIP\n"
            "\t\tstage 2 - stage 1, then search for unused blocks on pages\n"
            "\t-p parallel threads on stage 2, between 1 and %d\n"
+           "\t-P print progress bar, step 16 MiB\n"
            "\t-d log level 0-3, default 1\n"
            "\t-f database.fdb\n", name, MAX_THREADS);
 }
@@ -125,7 +129,7 @@ void version(char *name) {
 }
 
 int parse(int argc, char *argv[]) {
-    char *opts = "hvtb:d:f:s:p:";
+    char *opts = "hvtb:d:f:s:p:P";
     int opt;
     while ((opt = getopt(argc, argv, opts)) != -1) {
         switch (opt) {
@@ -167,6 +171,9 @@ int parse(int argc, char *argv[]) {
                     printf("Threads count must be between 1 and %d\n", MAX_THREADS);
                     goodbye = 2;
                 }
+                break;
+            case 'P':
+                progress_bar_step = DEFAULT_PROGRESS_BAR_STEP;
                 break;
             default:
                 fprintf(stderr, "Unknown argument %s\n", optarg);
@@ -258,6 +265,20 @@ int stage1(void)
                 }
             }
         }
+        //Print status bar
+        if (progress_bar_step > 0 && (((i * page_size) % progress_bar_step == 0) || (i + 1 == total_pages))) {
+            char db_size[32];
+            byte2str(db_size, total_pages * page_size);
+            char processed_size[32];
+            byte2str(processed_size, (i + 1) * page_size);
+            fprintf(stdout, "\rProcessed bytes %s / %s (%ld%%)",
+                    processed_size, db_size, 100 * (i + 1) / total_pages);
+            fflush(stdout);
+        }
+    }
+    if (progress_bar_step > 0){
+        fprintf(stdout, "\n");
+        fflush(stdout);
     }
     free(page);
     return 0;
@@ -383,6 +404,17 @@ void * stage2(void *argv) {
             arg->status = ERR_IO;
             return 0;
         }
+        //Print status bar
+        if ((progress_bar_step > 0) &&  ((((i - arg->start ) * page_size)  % progress_bar_step == 0) || (i + 1 == arg->finish))) {
+            char buf[MAX_THREADS + 1];
+            buf[0] = '\r';
+            for(int t = 0; t < arg->thread_number; t++) {
+                buf[t + 1] = '\t';
+            }
+            // proc
+            fprintf(stdout, "%s%ld%%", buf, 100 * (i + 1 - arg->start) / (arg->finish - arg->start));
+            fflush(stdout);
+        }
     }
     free(page);
     arg->blocks_for_trim = blocks_for_trim_thr;
@@ -431,6 +463,13 @@ int main(int argc, char *argv[]) {
     mylog(1, message);
 
     //CHECKS
+
+    //Check argument compatibility
+    //Ключи -d и -P не совместимы
+    if (progress_bar_step > 0 && log_level > 1) {
+        fprintf(stderr, "Progress bar and debug level greater than 1 are incompatible.\n");
+        return 1;
+    }
 
     //Check ODS version
     if (!is_supported_ods()) {
@@ -497,7 +536,16 @@ int main(int argc, char *argv[]) {
     //Stage 2
     if (stage == 2) {
         struct stage2_info stage2_info[MAX_THREADS];
+        if (progress_bar_step > 0) {
+            for (long thread = 0; thread < threads_count; thread++) {
+                //Progress bar
+                fprintf(stdout, "Thr %ld\t", thread);
+            }
+            fprintf(stdout, "\n");
+            fsync(STDOUT_FILENO);
+        }
         for (long thread = 0; thread < threads_count; thread++) {
+            stage2_info[thread].thread_number = thread;
             stage2_info[thread].start = total_pages * (thread) / threads_count;
             stage2_info[thread].finish = total_pages * (thread + 1) / threads_count;
             sprintf(message, "Starting thread %ld range %ld - %ld\n",
@@ -512,6 +560,9 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Error %d on thread %ld\n", stage2_info[thread].status, thread);
                 err = stage2_info[thread].status;
             }
+        }
+        if (progress_bar_step > 0) {
+            fprintf(stdout, "\n");
         }
     }
 

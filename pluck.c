@@ -19,8 +19,11 @@
 #define ERR_TRIM 3
 #define ERR_DB_NOT_LOCKED 4
 #define ERR_DB_ENCRYPTED 5
+#define ERR_INCMP 6
 
 #define MAX_THREADS 128
+
+#define VER_STATUS_FILE 1
 
 #define MAX_SUPPORTED_ODS 6
 const unsigned short supported_ods[MAX_SUPPORTED_ODS] = {
@@ -56,13 +59,20 @@ long total_pages;
 struct header_page header_page;
 long pages_for_trim = 0;
 long blocks_for_trim = 0;
-struct stage2_info {
-    pthread_t thread_id;
-    long thread_number;
-    int status;
+char *status_filename;
+int fd_status_file = 0;
+int ver_status_file = VER_STATUS_FILE;
+struct status {
+    int thread_number;
+    int error;
     long start;
     long finish;
+    long position;
     long blocks_for_trim;
+};
+struct stage2_info {
+    pthread_t thread_id;
+    struct status st;
 };
 
 int is_supported_ods() {
@@ -116,6 +126,7 @@ void help(char *name) {
            "\t\tstage 2 - stage 1, then search for unused blocks on pages\n"
            "\t-p parallel threads on stage 2, between 1 and %d\n"
            "\t-P print progress bar, step 16 MiB\n"
+           "\t-S status filename\n"
            "\t-d log level 0-3, default 1\n"
            "\t-f database.fdb\n", name, MAX_THREADS);
 }
@@ -129,7 +140,7 @@ void version(char *name) {
 }
 
 int parse(int argc, char *argv[]) {
-    char *opts = "hvtb:d:f:s:p:P";
+    char *opts = "hvtb:d:f:s:p:PS:";
     int opt;
     while ((opt = getopt(argc, argv, opts)) != -1) {
         switch (opt) {
@@ -174,6 +185,9 @@ int parse(int argc, char *argv[]) {
                 break;
             case 'P':
                 progress_bar_step = DEFAULT_PROGRESS_BAR_STEP;
+                break;
+            case 'S':
+                status_filename = optarg;
                 break;
             default:
                 fprintf(stderr, "Unknown argument %s\n", optarg);
@@ -318,7 +332,8 @@ void * stage2(void *argv) {
     }
 
     page = malloc(page_size);
-    for (long i = arg->start; i < arg->finish; i++) {
+    //todo: replace i with a meaningful name page_num, page_index, etc
+    for (long i = arg->st.start; i < arg->st.finish; i++) {
         //Stage 2: Analyze page filling
         if (pread(fd, page, page_size, i * page_size) == page_size) {
             page_header = (struct page_header *) page;
@@ -390,8 +405,8 @@ void * stage2(void *argv) {
                                           i * page_size + bit * block_size, block_size)) {
                                 fprintf(stderr, "fallocate failed\n");
                                 free(page);
-                                arg->blocks_for_trim = blocks_for_trim_thr;
-                                arg->status = ERR_TRIM;
+                                arg->st.blocks_for_trim = blocks_for_trim_thr;
+                                arg->st.error = ERR_TRIM;
                                 return 0;
                             }
                         }
@@ -400,25 +415,38 @@ void * stage2(void *argv) {
             }
         } else {
             free(page);
-            arg->blocks_for_trim = blocks_for_trim_thr;
-            arg->status = ERR_IO;
+            arg->st.blocks_for_trim = blocks_for_trim_thr;
+            arg->st.error = ERR_IO;
             return 0;
         }
+        //Write status in status file
+        if (fd_status_file)
+        {
+            arg->st.position = i;
+            arg->st.blocks_for_trim = blocks_for_trim_thr;
+            arg->st.blocks_for_trim = blocks_for_trim_thr;
+            long bytes_written = pwrite(fd_status_file, &arg->st, sizeof(arg->st),
+                                        sizeof(ver_status_file) + sizeof(threads_count) + sizeof(arg->st) * arg->st.thread_number);
+            if (bytes_written != sizeof(arg->st))
+            {
+                fprintf(stderr, "Error write data in status file\n");
+            }
+        }
         //Print status bar
-        if ((progress_bar_step > 0) &&  ((((i - arg->start ) * page_size)  % progress_bar_step == 0) || (i + 1 == arg->finish))) {
+        if ((progress_bar_step > 0) &&  ((((i - arg->st.start ) * page_size)  % progress_bar_step == 0) || (i + 1 == arg->st.finish))) {
             char buf[MAX_THREADS + 1];
             buf[0] = '\r';
-            for(int t = 0; t < arg->thread_number; t++) {
+            for(int t = 0; t < arg->st.thread_number; t++) {
                 buf[t + 1] = '\t';
             }
             // proc
-            fprintf(stdout, "%s%ld%%", buf, 100 * (i + 1 - arg->start) / (arg->finish - arg->start));
+            fprintf(stdout, "%s%ld%%", buf, 100 * (i + 1 - arg->st.start) / (arg->st.finish - arg->st.start));
             fflush(stdout);
         }
     }
     free(page);
-    arg->blocks_for_trim = blocks_for_trim_thr;
-    arg->status = 0;
+    arg->st.blocks_for_trim = blocks_for_trim_thr;
+    arg->st.error = 0;
     return 0;
 }
 
@@ -432,6 +460,40 @@ int main(int argc, char *argv[]) {
     parse(argc, argv);
     if (goodbye > 0)
         return goodbye - 1;
+    //todo: Change info from different debug levels
+    //todo: Change format, max page count
+    if (status_filename && (db_filename == NULL)) {
+        fd_status_file = open(status_filename, O_RDONLY);
+        if (fd_status_file < 0) {
+            fprintf(stderr, "Error %d open file %s\n", fd_status_file, status_filename);
+            return ERR_IO;
+        }
+        if (read(fd_status_file, &ver_status_file, sizeof(ver_status_file)) != sizeof(ver_status_file))
+        {
+            fprintf(stderr, "Error read status file");
+            return ERR_IO;
+        }
+        if (ver_status_file != VER_STATUS_FILE)
+        {
+            fprintf(stderr, "Incompatible version status file %d\n", ver_status_file);
+            return ERR_INCMP;
+        }
+        if (read(fd_status_file, &threads_count, sizeof(threads_count)) != sizeof(threads_count))
+        {
+            fprintf(stderr, "Error read status file");
+           return ERR_IO;
+        }
+        fprintf(stdout, "Version %d, threads %d\n", ver_status_file, threads_count);
+        fprintf(stdout, "thread\terror\tstart\tfinish\tpos\ttrim\n"
+                        "\t\tpage\tpage\t\tblock\n");
+        struct status thr_status;
+        while (read(fd_status_file, &thr_status, sizeof(thr_status)) == sizeof(thr_status)) {
+            fprintf(stdout, "%d\t%d\t%ld\t%ld\t%ld\t%ld\n", thr_status.thread_number, thr_status.error,
+                    thr_status.start, thr_status.finish, thr_status.position, thr_status.blocks_for_trim);
+        }
+        close(fd_status_file);
+        return 0;
+    }
     if (!db_filename) {
         help(argv[0]);
         return 0;
@@ -465,7 +527,7 @@ int main(int argc, char *argv[]) {
     //CHECKS
 
     //Check argument compatibility
-    //Ключи -d и -P не совместимы
+    //Args -d и -P incompatible
     if (progress_bar_step > 0 && log_level > 1) {
         fprintf(stderr, "Progress bar and debug level greater than 1 are incompatible.\n");
         return 1;
@@ -533,6 +595,23 @@ int main(int argc, char *argv[]) {
     sprintf(message, "Stage 1: Pages for trim %ld (%s)\n", pages_for_trim, buf4size);
     mylog(1, message);
 
+    if (status_filename)
+    {
+        fd_status_file = open(status_filename, O_CREAT | O_RDWR, 00660);
+        if (fd_status_file < 0) {
+            fprintf(stderr, "Error %d open file %s\n", fd_status_file, status_filename);
+            return ERR_IO;
+        }
+        if (pwrite(fd_status_file, &ver_status_file, sizeof(ver_status_file), 0) != sizeof(ver_status_file)) {
+            fprintf(stderr, "Error writing status file (version)");
+            return ERR_IO;
+        }
+        if (pwrite(fd_status_file, &threads_count, sizeof(threads_count), sizeof(ver_status_file)) != sizeof(threads_count)) {
+            fprintf(stderr, "Error writing status file (threads_count)");
+            return ERR_IO;
+        }
+    }
+
     //Stage 2
     if (stage == 2) {
         struct stage2_info stage2_info[MAX_THREADS];
@@ -544,21 +623,22 @@ int main(int argc, char *argv[]) {
             fprintf(stdout, "\n");
             fsync(STDOUT_FILENO);
         }
-        for (long thread = 0; thread < threads_count; thread++) {
-            stage2_info[thread].thread_number = thread;
-            stage2_info[thread].start = total_pages * (thread) / threads_count;
-            stage2_info[thread].finish = total_pages * (thread + 1) / threads_count;
-            sprintf(message, "Starting thread %ld range %ld - %ld\n",
-                    thread, stage2_info[thread].start, stage2_info[thread].finish);
+        for (int thread = 0; thread < threads_count; thread++) {
+            //todo: Add loading and verification of variables from the file status
+            stage2_info[thread].st.thread_number = thread;
+            stage2_info[thread].st.start = total_pages * (thread) / threads_count;
+            stage2_info[thread].st.finish = total_pages * (thread + 1) / threads_count;
+            sprintf(message, "Starting thread %d range %ld - %ld\n",
+                    thread, stage2_info[thread].st.start, stage2_info[thread].st.finish);
             mylog(2, message);
             pthread_create(&(stage2_info[thread].thread_id), NULL, stage2, &stage2_info[thread]);
         }
         for (long thread = 0; thread < threads_count; thread++) {
             pthread_join(stage2_info[thread].thread_id, NULL);
-            blocks_for_trim += stage2_info[thread].blocks_for_trim;
-            if (stage2_info[thread].status > 0) {
-                fprintf(stderr, "Error %d on thread %ld\n", stage2_info[thread].status, thread);
-                err = stage2_info[thread].status;
+            blocks_for_trim += stage2_info[thread].st.blocks_for_trim;
+            if (stage2_info[thread].st.error > 0) {
+                fprintf(stderr, "Error %d on thread %ld\n", stage2_info[thread].st.error, thread);
+                err = stage2_info[thread].st.error;
             }
         }
         if (progress_bar_step > 0) {
@@ -567,6 +647,9 @@ int main(int argc, char *argv[]) {
     }
 
     close(fd);
+    if (fd_status_file) {
+        close(fd_status_file);
+    }
     if (stage == 2) {
         byte2str(buf4size, blocks_for_trim * block_size);
         sprintf(message, "Stage 2: Blocks for trim %ld (%s)\n", blocks_for_trim, buf4size);

@@ -315,7 +315,7 @@ void * stage2(void *argv) {
     const USHORT page_size = header_page.hdr_page_size;
     const USHORT ods_version = header_page.hdr_ods_version;
     char message[128];
-    long blocks_for_trim_thr = 0;
+    long blocks_for_trim_thr = arg->st.blocks_for_trim;
 
     page_bitmap_fill = page_bitmap_fill >> (8 * sizeof(page_bitmap_fill) - page_size / block_size);
     data_page_bitmap_fill = 0;
@@ -333,7 +333,7 @@ void * stage2(void *argv) {
 
     page = malloc(page_size);
     //todo: replace i with a meaningful name page_num, page_index, etc
-    for (long i = arg->st.start; i < arg->st.finish; i++) {
+    for (long i = arg->st.position; i < arg->st.finish; i++) {
         //Stage 2: Analyze page filling
         if (pread(fd, page, page_size, i * page_size) == page_size) {
             page_header = (struct page_header *) page;
@@ -452,6 +452,7 @@ void * stage2(void *argv) {
 int main(int argc, char *argv[]) {
     struct stat fstat_before, fstat_after;
     int status;
+    int load_from_status_file = 0;
     char message[128];
     int err = 0;
     char buf4size[32];
@@ -596,18 +597,48 @@ int main(int argc, char *argv[]) {
 
     if (status_filename)
     {
-        fd_status_file = open(status_filename, O_CREAT | O_RDWR, 00660);
-        if (fd_status_file < 0) {
-            fprintf(stderr, "Error %d open file %s\n", fd_status_file, status_filename);
-            return ERR_IO;
-        }
-        if (pwrite(fd_status_file, &ver_status_file, sizeof(ver_status_file), 0) != sizeof(ver_status_file)) {
-            fprintf(stderr, "Error writing status file (version)");
-            return ERR_IO;
-        }
-        if (pwrite(fd_status_file, &threads_count, sizeof(threads_count), sizeof(ver_status_file)) != sizeof(threads_count)) {
-            fprintf(stderr, "Error writing status file (threads_count)");
-            return ERR_IO;
+        if (access(status_filename, F_OK) == 0) {
+            // status file exists
+            fd_status_file = open(status_filename, O_RDWR, 00660);
+            if (fd_status_file < 0) {
+                fprintf(stderr, "Error %d open file %s\n", fd_status_file, status_filename);
+                return ERR_IO;
+            }
+            if (read(fd_status_file, &ver_status_file, sizeof(ver_status_file)) != sizeof(ver_status_file))
+            {
+                fprintf(stderr, "Error read status file");
+                return ERR_IO;
+            }
+            if (ver_status_file != VER_STATUS_FILE)
+            {
+                fprintf(stderr, "Incompatible version status file %d\n", ver_status_file);
+                return ERR_INCMP;
+            }
+            if (read(fd_status_file, &threads_count, sizeof(threads_count)) != sizeof(threads_count))
+            {
+                fprintf(stderr, "Error read status file");
+                return ERR_IO;
+            }
+            if ((threads_count < 1) || (threads_count > MAX_THREADS)){
+                fprintf(stderr, "Wrong threads count from file. Threads count must be between 1 and %d\n", MAX_THREADS);
+                return ERR_INCMP;
+            }
+            load_from_status_file = 1;
+        } else {
+            // status file doesn't exist
+            fd_status_file = open(status_filename, O_CREAT | O_RDWR, 00660);
+            if (fd_status_file < 0) {
+                fprintf(stderr, "Error %d open file %s\n", fd_status_file, status_filename);
+                return ERR_IO;
+            }
+            if (pwrite(fd_status_file, &ver_status_file, sizeof(ver_status_file), 0) != sizeof(ver_status_file)) {
+                fprintf(stderr, "Error writing status file (version)");
+                return ERR_IO;
+            }
+            if (pwrite(fd_status_file, &threads_count, sizeof(threads_count), sizeof(ver_status_file)) != sizeof(threads_count)) {
+                fprintf(stderr, "Error writing status file (threads_count)");
+                return ERR_IO;
+            }
         }
     }
 
@@ -624,9 +655,28 @@ int main(int argc, char *argv[]) {
         }
         for (int thread = 0; thread < threads_count; thread++) {
             //todo: Add loading and verification of variables from the file status
-            stage2_info[thread].st.thread_number = thread;
-            stage2_info[thread].st.start = total_pages * (thread) / threads_count;
-            stage2_info[thread].st.finish = total_pages * (thread + 1) / threads_count;
+            if (load_from_status_file)
+            {
+                long bytes_read = pread(fd_status_file, &stage2_info[thread].st, sizeof(stage2_info[thread].st),
+                                            sizeof(ver_status_file) + sizeof(threads_count) + sizeof(stage2_info[thread].st) * thread);
+                if (bytes_read != sizeof(stage2_info[thread].st))
+                {
+                    fprintf(stderr, "Error write data in status file\n");
+                }
+                if (stage2_info[thread].st.error)
+                {
+                    fprintf(stderr, "Thread %d return error %d. Can't load from file", thread, stage2_info[thread].st.error);
+                    return ERR_INCMP;
+                }
+                //todo Add check start, finish and position
+            }
+            else
+            {
+                stage2_info[thread].st.thread_number = thread;
+                stage2_info[thread].st.start = total_pages * (thread) / threads_count;
+                stage2_info[thread].st.position = stage2_info[thread].st.start;
+                stage2_info[thread].st.finish = total_pages * (thread + 1) / threads_count;
+            }
             sprintf(message, "Starting thread %d range %ld - %ld\n",
                     thread, stage2_info[thread].st.start, stage2_info[thread].st.finish);
             mylog(2, message);

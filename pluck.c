@@ -424,7 +424,6 @@ void * stage2(void *argv) {
         {
             arg->st.position = i;
             arg->st.blocks_for_trim = blocks_for_trim_thr;
-            arg->st.blocks_for_trim = blocks_for_trim_thr;
             long bytes_written = pwrite(fd_status_file, &arg->st, sizeof(arg->st),
                                         sizeof(ver_status_file) + sizeof(threads_count) + sizeof(arg->st) * arg->st.thread_number);
             if (bytes_written != sizeof(arg->st))

@@ -397,19 +397,45 @@ void * stage2(void *argv) {
                         page_type_name[page_header->page_type], page_bitmap);
                 mylog(3, message);
                 //blocks for trim
-                for (int bit = 0; bit < page_size / block_size; bit++) {
-                    if (!(page_bitmap & (1UL << bit))) {
-                        blocks_for_trim_thr++;
-                        if (trim) {
-                            if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-                                          i * page_size + bit * block_size, block_size)) {
-                                fprintf(stderr, "fallocate failed\n");
-                                free(page);
-                                arg->st.blocks_for_trim = blocks_for_trim_thr;
-                                arg->st.error = ERR_TRIM;
-                                return 0;
+                int blocks_for_trim_on_page = 0;
+                const int bits_per_page = page_size / block_size;
+                for (int bit = 0; bit < bits_per_page; bit++) {
+                    // todo: Add compare with 255UL, 127UL, 63UL, 31UL, 15UL
+                    // 8 bits - 32K page, 4K block I/O
+                    // 4 bits - 16K page, 4K block I/O
+                    if ((bits_per_page - bit >= 3) && !(page_bitmap & (7UL << bit))) {
+                        blocks_for_trim_thr += 3;
+                        blocks_for_trim_on_page = 3;
+                    } else {
+                        if ((bits_per_page - bit >= 2) && !(page_bitmap & (3UL << bit))) {
+                            blocks_for_trim_thr += 2;
+                            blocks_for_trim_on_page = 2;
+                        } else {
+                            if ((bits_per_page - bit >= 1) && !(page_bitmap & (1UL << bit))) {
+                                blocks_for_trim_thr += 1;
+                                blocks_for_trim_on_page = 1;
                             }
                         }
+                    }
+                    if (trim & blocks_for_trim_on_page) {
+                        sprintf(message, "\ttrim %d blocks on page %ld, bit %d\n",
+                                blocks_for_trim_on_page, i, bit);
+                        mylog(3, message);
+                        sprintf(message, "\toffset: %ld size: %d\n",
+                                i * page_size + bit * block_size, block_size * blocks_for_trim_on_page);
+                        mylog(3, message);
+                        if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+                                      i * page_size + bit * block_size, block_size * blocks_for_trim_on_page)) {
+                            fprintf(stderr, "fallocate failed\n");
+                            free(page);
+                            arg->st.blocks_for_trim = blocks_for_trim_thr;
+                            arg->st.error = ERR_TRIM;
+                            return 0;
+                        }
+                    }
+                    if (blocks_for_trim_on_page) {
+                        bit += blocks_for_trim_on_page - 1;
+                        blocks_for_trim_on_page = 0;
                     }
                 }
             }

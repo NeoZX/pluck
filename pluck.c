@@ -239,8 +239,10 @@ int stage1(void)
             return ERR_UNSUPPORTED_ODS;
             break;
     }
-    sprintf(message, "Read 1 pip page %u\n", FIRST_PIP_PAGE);
-    mylog(2, message);
+    if (log_level >= 2) {
+        sprintf(message, "Read 1 pip page %u\n", FIRST_PIP_PAGE);
+        mylog(2, message);
+    }
     if (pread(fd, page, page_size, FIRST_PIP_PAGE * page_size) != page_size) {
         fprintf(stderr, "Error read page %u\n", FIRST_PIP_PAGE);
         free(page);
@@ -250,8 +252,10 @@ int stage1(void)
     for (long i = *pip_min; i < total_pages; i++) {
         //Read next pip?
         if (i + 1 == pip_num * pages_in_pip) {
-            sprintf(message, "Read %d pip page %lu\n", pip_num + 1, i);
-            mylog(2, message);
+            if (log_level >= 2) {
+                sprintf(message, "Read %d pip page %lu\n", pip_num + 1, i);
+                mylog(2, message);
+            }
             if (pread(fd, page, page_size, i * page_size) != page_size) {
                 fprintf(stderr, "Error read page %lu\n", i);
                 free(page);
@@ -268,8 +272,10 @@ int stage1(void)
             if ((pip->bits[i % pages_in_pip / 8]) & (0x01 << i % 8)) {
                 pages_for_trim++;
                 //trim
-                sprintf(message, "trim page %lu\n", i + 1);
-                mylog(3, message);
+                if (log_level >= 3) {
+                    sprintf(message, "trim page %lu\n", i + 1);
+                    mylog(3, message);
+                }
                 if (trim) {
                     if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE, i * page_size, page_size)) {
                         fprintf(stderr, "fallocate failed\n");
@@ -316,6 +322,11 @@ void * stage2(void *argv) {
     const USHORT ods_version = header_page.hdr_ods_version;
     char message[128];
     long blocks_for_trim_thr = arg->st.blocks_for_trim;
+
+    if (log_level >= 2) {
+        sprintf(message, "Starting thread %ld\n", arg->thread_id);
+        mylog(2, message);
+    }
 
     page_bitmap_fill = page_bitmap_fill >> (8 * sizeof(page_bitmap_fill) - page_size / block_size);
     data_page_bitmap_fill = 0;
@@ -393,9 +404,11 @@ void * stage2(void *argv) {
 
             //Trim blocks
             if ((page_bitmap < page_bitmap_fill) && (page_bitmap != 0)) {
-                sprintf(message, "Page %lu (%s), bitmap 0x%lx\n", i,
-                        page_type_name[page_header->page_type], page_bitmap);
-                mylog(3, message);
+                if (log_level >= 3) {
+                    sprintf(message, "Page %lu (%s), bitmap 0x%lx\n", i,
+                            page_type_name[page_header->page_type], page_bitmap);
+                    mylog(3, message);
+                }
                 //blocks for trim
                 int blocks_for_trim_on_page = 0;
                 const int bits_per_page = page_size / block_size;
@@ -418,12 +431,14 @@ void * stage2(void *argv) {
                         }
                     }
                     if (trim & blocks_for_trim_on_page) {
-                        sprintf(message, "\ttrim %d blocks on page %ld, bit %d\n",
-                                blocks_for_trim_on_page, i, bit);
-                        mylog(3, message);
-                        sprintf(message, "\toffset: %ld size: %d\n",
-                                i * page_size + bit * block_size, block_size * blocks_for_trim_on_page);
-                        mylog(3, message);
+                        if (log_level >= 3) {
+                            sprintf(message, "\ttrim %d blocks on page %ld, bit %d\n",
+                                    blocks_for_trim_on_page, i, bit);
+                            mylog(3, message);
+                            sprintf(message, "\toffset: %ld size: %d\n",
+                                    i * page_size + bit * block_size, block_size * blocks_for_trim_on_page);
+                            mylog(3, message);
+                        }
                         if (fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                                       i * page_size + bit * block_size, block_size * blocks_for_trim_on_page)) {
                             fprintf(stderr, "fallocate failed\n");
@@ -703,9 +718,11 @@ int main(int argc, char *argv[]) {
                 stage2_info[thread].st.position = stage2_info[thread].st.start;
                 stage2_info[thread].st.finish = total_pages * (thread + 1) / threads_count;
             }
-            sprintf(message, "Starting thread %d range %ld - %ld\n",
-                    thread, stage2_info[thread].st.start, stage2_info[thread].st.finish);
-            mylog(2, message);
+            if (log_level >= 2) {
+                sprintf(message, "Starting thread %d range %ld - %ld\n",
+                        thread, stage2_info[thread].st.start, stage2_info[thread].st.finish);
+                mylog(2, message);
+            }
             pthread_create(&(stage2_info[thread].thread_id), NULL, stage2, &stage2_info[thread]);
         }
         for (long thread = 0; thread < threads_count; thread++) {
@@ -732,11 +749,13 @@ int main(int argc, char *argv[]) {
     }
     stat(db_filename, &fstat_after);
     if (trim) {
-        const long file_size_reduced = (fstat_before.st_blocks - fstat_after.st_blocks) * fstat_after.st_blksize;
-        byte2str(buf4size, file_size_reduced);
-        sprintf(message, "FS block usage reduced from %ld to %ld (FS block size %ld)\nReleased %s\n",
-                fstat_before.st_blocks, fstat_after.st_blocks, fstat_after.st_blksize, buf4size);
-        mylog(2, message);
+        if (log_level >= 2) {
+            const long file_size_reduced = (fstat_before.st_blocks - fstat_after.st_blocks) * fstat_after.st_blksize;
+            byte2str(buf4size, file_size_reduced);
+            sprintf(message, "FS block usage reduced from %ld to %ld (FS block size %ld)\nReleased %s\n",
+                    fstat_before.st_blocks, fstat_after.st_blocks, fstat_after.st_blksize, buf4size);
+            mylog(2, message);
+        }
     }
     return err;
 }

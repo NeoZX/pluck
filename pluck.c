@@ -70,10 +70,8 @@ struct status {
     long position;
     long blocks_for_trim;
 };
-struct stage2_info {
-    pthread_t thread_id;
-    struct status st;
-};
+struct status stage2_status[MAX_THREADS];
+pthread_t stage2_thread_id[MAX_THREADS];
 
 int is_supported_ods() {
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
@@ -305,8 +303,7 @@ int stage1(void)
 }
 
 void * stage2(void *argv) {
-    struct stage2_info *arg;
-    arg = argv;
+    struct status *arg = argv;
 
     char *page;
     unsigned long page_bitmap;  //MAX_PAGE_SIZE / min(block_size) = 32768 / 512 = 64 bit
@@ -321,10 +318,10 @@ void * stage2(void *argv) {
     const USHORT page_size = header_page.hdr_page_size;
     const USHORT ods_version = header_page.hdr_ods_version;
     char message[128];
-    long blocks_for_trim_thr = arg->st.blocks_for_trim;
+    long blocks_for_trim_thr = arg->blocks_for_trim;
 
     if (log_level >= 2) {
-        sprintf(message, "Starting thread %ld\n", arg->thread_id);
+        sprintf(message, "Started thread %d\n", arg->thread_number);
         mylog(2, message);
     }
 
@@ -344,7 +341,7 @@ void * stage2(void *argv) {
 
     page = malloc(page_size);
     //todo: replace i with a meaningful name page_num, page_index, etc
-    for (long i = arg->st.position; i < arg->st.finish; i++) {
+    for (long i = arg->position; i < arg->finish; i++) {
         //Stage 2: Analyze page filling
         if (pread(fd, page, page_size, i * page_size) == page_size) {
             page_header = (struct page_header *) page;
@@ -443,8 +440,8 @@ void * stage2(void *argv) {
                                       i * page_size + bit * block_size, block_size * blocks_for_trim_on_page)) {
                             fprintf(stderr, "fallocate failed\n");
                             free(page);
-                            arg->st.blocks_for_trim = blocks_for_trim_thr;
-                            arg->st.error = ERR_TRIM;
+                            arg->blocks_for_trim = blocks_for_trim_thr;
+                            arg->error = ERR_TRIM;
                             return 0;
                         }
                     }
@@ -456,37 +453,38 @@ void * stage2(void *argv) {
             }
         } else {
             free(page);
-            arg->st.blocks_for_trim = blocks_for_trim_thr;
-            arg->st.error = ERR_IO;
+            arg->blocks_for_trim = blocks_for_trim_thr;
+            arg->error = ERR_IO;
             return 0;
         }
         //Write status in status file
         if (fd_status_file)
         {
-            arg->st.position = i;
-            arg->st.blocks_for_trim = blocks_for_trim_thr;
-            long bytes_written = pwrite(fd_status_file, &arg->st, sizeof(arg->st),
-                                        sizeof(ver_status_file) + sizeof(threads_count) + sizeof(arg->st) * arg->st.thread_number);
-            if (bytes_written != sizeof(arg->st))
+            arg->position = i;
+            arg->blocks_for_trim = blocks_for_trim_thr;
+            long bytes_written = pwrite(fd_status_file, arg, sizeof(*arg),
+                                        sizeof(ver_status_file) + sizeof(threads_count) + sizeof(*arg) * arg->thread_number);
+            if (bytes_written != sizeof(*arg))
             {
-                fprintf(stderr, "Error write data in status file\n");
+                fprintf(stderr, "Error write data in status file. Writen %ld, must %ld\n", bytes_written, sizeof(*arg));
+                return 0;
             }
         }
         //Print status bar
-        if ((progress_bar_step > 0) &&  ((((i - arg->st.start ) * page_size)  % progress_bar_step == 0) || (i + 1 == arg->st.finish))) {
+        if ((progress_bar_step > 0) &&  ((((i - arg->start ) * page_size)  % progress_bar_step == 0) || (i + 1 == arg->finish))) {
             char buf[MAX_THREADS + 1];
             buf[0] = '\r';
-            for(int t = 0; t < arg->st.thread_number; t++) {
+            for(int t = 0; t < arg->thread_number; t++) {
                 buf[t + 1] = '\t';
             }
             // proc
-            fprintf(stdout, "%s%ld%%", buf, 100 * (i + 1 - arg->st.start) / (arg->st.finish - arg->st.start));
+            fprintf(stdout, "%s%ld%%", buf, 100 * (i + 1 - arg->start) / (arg->finish - arg->start));
             fflush(stdout);
         }
     }
     free(page);
-    arg->st.blocks_for_trim = blocks_for_trim_thr;
-    arg->st.error = 0;
+    arg->blocks_for_trim = blocks_for_trim_thr;
+    arg->error = 0;
     return 0;
 }
 
@@ -685,7 +683,6 @@ int main(int argc, char *argv[]) {
 
     //Stage 2
     if (stage == 2) {
-        struct stage2_info stage2_info[MAX_THREADS];
         if (progress_bar_step > 0) {
             for (long thread = 0; thread < threads_count; thread++) {
                 //Progress bar
@@ -698,39 +695,40 @@ int main(int argc, char *argv[]) {
             //todo: Add loading and verification of variables from the file status
             if (load_from_status_file)
             {
-                long bytes_read = pread(fd_status_file, &stage2_info[thread].st, sizeof(stage2_info[thread].st),
-                                            sizeof(ver_status_file) + sizeof(threads_count) + sizeof(stage2_info[thread].st) * thread);
-                if (bytes_read != sizeof(stage2_info[thread].st))
+                long bytes_read = pread(fd_status_file, &stage2_status[thread], sizeof(stage2_status[thread]),
+                                            sizeof(ver_status_file) + sizeof(threads_count) + sizeof(stage2_status[thread]) * thread);
+                if (bytes_read != sizeof(stage2_status[thread]))
                 {
-                    fprintf(stderr, "Error write data in status file\n");
+                    fprintf(stderr, "Error read data in status file. Read %ld, must %ld\n", sizeof(stage2_status[thread]), bytes_read);
+                    return 0;
                 }
-                if (stage2_info[thread].st.error)
+                if (stage2_status[thread].error)
                 {
-                    fprintf(stderr, "Thread %d return error %d. Can't load from file", thread, stage2_info[thread].st.error);
+                    fprintf(stderr, "Thread %d return error %d. Can't load from file", thread, stage2_status[thread].error);
                     return ERR_INCMP;
                 }
                 //todo Add check start, finish and position
             }
             else
             {
-                stage2_info[thread].st.thread_number = thread;
-                stage2_info[thread].st.start = total_pages * (thread) / threads_count;
-                stage2_info[thread].st.position = stage2_info[thread].st.start;
-                stage2_info[thread].st.finish = total_pages * (thread + 1) / threads_count;
+                stage2_status[thread].thread_number = thread;
+                stage2_status[thread].start = total_pages * (thread) / threads_count;
+                stage2_status[thread].position = stage2_status[thread].start;
+                stage2_status[thread].finish = total_pages * (thread + 1) / threads_count;
             }
             if (log_level >= 2) {
                 sprintf(message, "Starting thread %d range %ld - %ld\n",
-                        thread, stage2_info[thread].st.start, stage2_info[thread].st.finish);
+                        thread, stage2_status[thread].start, stage2_status[thread].finish);
                 mylog(2, message);
             }
-            pthread_create(&(stage2_info[thread].thread_id), NULL, stage2, &stage2_info[thread]);
+            pthread_create(&(stage2_thread_id[thread]), NULL, stage2, &stage2_status[thread]);
         }
         for (long thread = 0; thread < threads_count; thread++) {
-            pthread_join(stage2_info[thread].thread_id, NULL);
-            blocks_for_trim += stage2_info[thread].st.blocks_for_trim;
-            if (stage2_info[thread].st.error > 0) {
-                fprintf(stderr, "Error %d on thread %ld\n", stage2_info[thread].st.error, thread);
-                err = stage2_info[thread].st.error;
+            pthread_join(stage2_thread_id[thread], NULL);
+            blocks_for_trim += stage2_status[thread].blocks_for_trim;
+            if (stage2_status[thread].error > 0) {
+                fprintf(stderr, "Error %d on thread %ld\n", stage2_status[thread].error, thread);
+                err = stage2_status[thread].error;
             }
         }
         if (progress_bar_step > 0) {

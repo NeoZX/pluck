@@ -20,6 +20,7 @@
 #define ERR_DB_NOT_LOCKED 4
 #define ERR_DB_ENCRYPTED 5
 #define ERR_INCMP 6
+#define ERR_MUTEX 7
 
 #define MAX_THREADS 128
 
@@ -72,6 +73,7 @@ struct status {
 };
 struct status stage2_status[MAX_THREADS];
 pthread_t stage2_thread_id[MAX_THREADS];
+pthread_mutex_t mutex_stdout = PTHREAD_MUTEX_INITIALIZER;
 
 int is_supported_ods() {
     for (short i = 0; i < MAX_SUPPORTED_ODS; i++) {
@@ -304,7 +306,7 @@ int stage1(void)
 
 void * stage2(void *argv) {
     struct status *arg = argv;
-
+    int mutex_status = 0;
     char *page;
     unsigned long page_bitmap;  //MAX_PAGE_SIZE / min(block_size) = 32768 / 512 = 64 bit
     struct page_header *page_header;
@@ -478,8 +480,21 @@ void * stage2(void *argv) {
                 buf[t + 1] = '\t';
             }
             // proc
+            mutex_status = pthread_mutex_lock(&mutex_stdout);
+            if (mutex_status != 0) {
+                fprintf(stderr, "Error %d lock mutex in thread %d\n", mutex_status, arg->thread_number);
+                arg->error = ERR_MUTEX;
+                return 0;
+            }
             fprintf(stdout, "%s%ld%%", buf, 100 * (i + 1 - arg->start) / (arg->finish - arg->start));
             fflush(stdout);
+            mutex_status = pthread_mutex_unlock(&mutex_stdout);
+            if (mutex_status != 0) {
+                fprintf(stderr, "Error %d unlock mutex in thread %d\n", mutex_status, arg->thread_number);
+                arg->error = ERR_MUTEX;
+                return 0;
+            }
+
         }
     }
     free(page);
